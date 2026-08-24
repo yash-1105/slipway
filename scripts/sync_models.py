@@ -238,6 +238,11 @@ def main() -> int:
     existing = yaml.safe_load(CATALOGUE.read_text()) if CATALOGUE.is_file() else {}
     existing = existing if isinstance(existing, dict) else {}
     roles = existing.get("roles") or {}
+    # Preserved like `roles`: a human decision the sync must not overwrite.
+    # Models a bake-off should compare for a role, beyond the one assigned. A
+    # newer model at the same price is a spec sheet, not evidence; this is where
+    # it waits for the harness to produce some.
+    bakeoff = existing.get("bakeoff_candidates") or {}
 
     for role, entry in list(roles.items()):
         for slot in ("primary", "fallback"):
@@ -246,6 +251,15 @@ def main() -> int:
                 print(
                     f"WARNING: {role}.{slot} points at {model_id!r}, which the "
                     "provider no longer lists.",
+                    file=sys.stderr,
+                )
+
+    for role, candidates in bakeoff.items():
+        for model_id in candidates or []:
+            if model_id not in ids:
+                print(
+                    f"WARNING: bakeoff candidate {role}.{model_id!r} is no longer "
+                    "listed by the provider.",
                     file=sys.stderr,
                 )
 
@@ -280,6 +294,7 @@ def main() -> int:
             str(m["id"]) for m in models if "responses" in (m.get("endpoints") or [])
         ),
         "roles": roles,
+        "bakeoff_candidates": bakeoff,
         "available": ids,
     }
 
@@ -306,6 +321,14 @@ def main() -> int:
         "#         model_id: <a different id from `available`>\n"
         "#         input_usd_per_mtok: <published price>\n"
         "#         output_usd_per_mtok: <published price>\n"
+        "#\n"
+        "# `bakeoff_candidates` is preserved across syncs too. It lists the models\n"
+        "# a bake-off should compare for a role, beyond the one assigned. A newer\n"
+        "# model at the same price is a spec sheet, not evidence; it goes here and\n"
+        "# waits for the harness to produce some. Nothing reads it at runtime, so\n"
+        "# two tests keep it honest: every candidate must still be listed by the\n"
+        "# provider, and the assigned primary must be among its own candidates --\n"
+        "# a comparison without the incumbent has no baseline to beat.\n"
         "\n"
     )
     CATALOGUE.write_text(header + yaml.safe_dump(document, sort_keys=False, width=100))

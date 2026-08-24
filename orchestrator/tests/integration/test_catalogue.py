@@ -188,3 +188,43 @@ def test_the_available_list_is_carried_through(tmp_path: Path) -> None:
 
     assert routing.available == ("vendor-a/primary-model", "vendor-b/fallback-model")
     assert routing.source_base_url == "https://api.novita.ai/openai/v1"
+
+
+def _shipped() -> dict[str, Any]:
+    path = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
+    loaded: dict[str, Any] = yaml.safe_load(path.read_text())
+    return loaded
+
+
+def test_bakeoff_candidates_name_models_the_provider_actually_lists() -> None:
+    """Nothing reads these at runtime, so only a test keeps them honest.
+
+    A candidate list that has quietly gone stale is worse than none: a bake-off
+    would fail on a retired id rather than compare anything.
+    """
+    shipped = _shipped()
+    available = set(shipped["available"])
+
+    for role, candidates in (shipped.get("bakeoff_candidates") or {}).items():
+        assert candidates, f"{role} has an empty candidate list"
+        for model_id in candidates:
+            assert model_id in available, (
+                f"bake-off candidate {model_id!r} for {role} is not in `available`. "
+                "Re-run `make models-sync`."
+            )
+
+
+def test_the_assigned_primary_is_among_its_own_bakeoff_candidates() -> None:
+    """A bake-off that does not include the incumbent measures nothing.
+
+    Without it there is no baseline to beat, and 'the new one scored 7' is not a
+    reason to switch.
+    """
+    shipped = _shipped()
+
+    for role, candidates in (shipped.get("bakeoff_candidates") or {}).items():
+        assigned = shipped["roles"][role]["primary"]["model_id"]
+        assert assigned in candidates, (
+            f"{role} is assigned {assigned!r} but its bake-off candidates are "
+            f"{candidates}. The incumbent has to be in the comparison."
+        )

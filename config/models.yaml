@@ -20,9 +20,17 @@
 #         model_id: <a different id from `available`>
 #         input_usd_per_mtok: <published price>
 #         output_usd_per_mtok: <published price>
+#
+# `bakeoff_candidates` is preserved across syncs too. It lists the models
+# a bake-off should compare for a role, beyond the one assigned. A newer
+# model at the same price is a spec sheet, not evidence; it goes here and
+# waits for the harness to produce some. Nothing reads it at runtime, so
+# two tests keep it honest: every candidate must still be listed by the
+# provider, and the assigned primary must be among its own candidates --
+# a comparison without the incumbent has no baseline to beat.
 
 source_base_url: https://api.novita.ai/openai/v1
-synced_at: '2026-08-24T13:44:14+00:00'
+synced_at: '2026-08-24T13:54:38+00:00'
 responses_api_endpoint_exists: true
 models_supporting_responses_endpoint:
 - deepseek/deepseek-v4-flash-0731
@@ -113,6 +121,10 @@ roles:
       supports_responses_endpoint: false
     context_window: 204800
     max_output_tokens: 131072
+bakeoff_candidates:
+  planner:
+  - zai-org/glm-5.2
+  - zai-org/glm-5.3
 available:
 - Sao10K/L3-8B-Stheno-v3.2
 - ai_infer_test_1

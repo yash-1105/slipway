@@ -67,34 +67,61 @@ retired.
 
 `SLIPWAY_NOVITA_BASE_URL` defaults to it in `app/config.py`.
 
-## The Responses API: CLAUDE.md is wrong
+## Probe methodology: a 404 is not self-explanatory
 
-CLAUDE.md states: *"Novita does NOT support the Responses API. Chat completions
-only."*
+**A 404 from a route probe made with an invalid model id is about the model, not
+the route.** Read it as "the endpoint does not exist" and you will conclude the
+opposite of the truth.
 
-**That is false.** The route exists at `/openai/v1/responses`, and 7 of the 150
-models list `responses` in their `endpoints` array — among them
-`zai-org/glm-5.3`, `deepseek/deepseek-v4-pro-0813` and `moonshotai/kimi-k3`.
+This cost one wrong conclusion here, which is once more than it should. Writing
+it down so it does not cost a second:
 
-A `400 INVALID_REQUEST_BODY` naming the model is a route that exists rejecting a
-model it does not serve. A `404 page not found` is a route that does not exist.
-The first probe of this endpoint sent an **empty** model id, got
-`404 MODEL_NOT_FOUND`, and read it as "no such route" — but that 404 was about
-the model, not the endpoint. Probing with a real id is what separated the two,
-and the probe in `scripts/sync_models.py` now does.
+- The first probe of `/responses` sent `{"model": "", ...}`. Novita answered
+  `404 {"code":404,"reason":"MODEL_NOT_FOUND","message":"model not found"}`.
+  That was read as "no such route". It was not: the route was there, and it was
+  objecting to the empty model.
+- Re-probed with a real id from the live `/models` list, the same endpoint
+  answers `400 INVALID_REQUEST_BODY: model ... does not support endpoint:
+  responses`. A route that exists, declining a model it does not serve.
+- A genuinely missing route answers differently again — `/openai/responses` and
+  `/v3/openai/responses` return `404 page not found`, plain text from the
+  router, with no JSON error body and no mention of a model.
 
-**Slipway still uses chat completions only, and that has not changed.** The
-reason is different from the one CLAUDE.md gives:
+The general rule, for any endpoint probe against any provider:
+
+1. Probe with a **valid** identifier read from the provider's own listing. An
+   invalid one makes every layer of the stack a candidate for the error.
+2. Distinguish the **shape** of the failure, not just the status code. A JSON
+   error body naming your input came from the application; a bare
+   `404 page not found` came from the router in front of it.
+3. Where the provider publishes per-item capabilities — Novita's `endpoints`
+   array on each model — read those instead of inferring capability from a
+   probe. They are the answer; a probe only confirms it.
+
+`scripts/sync_models.py` now probes with a real id and distinguishes
+`404 page not found` from a 400, so this specific mistake cannot recur silently.
+
+## The Responses API: support is per-model
+
+The route exists at `/openai/v1/responses`. 7 of the 150 models list `responses`
+in their `endpoints` array — among them `zai-org/glm-5.3`,
+`deepseek/deepseek-v4-pro-0813` and `moonshotai/kimi-k3`. The generated
+`config/models.yaml` records the full list under
+`models_supporting_responses_endpoint`.
+
+**Slipway uses chat completions only.** The reason is per-model support, not the
+absence of the API:
 
 - None of the five models this system routes to supports `responses`. Every one
   of `zai-org/glm-5.2`, `moonshotai/kimi-k2.7-code`,
   `deepseek/deepseek-v4-flash`, `zai-org/glm-4.7` and `deepseek/deepseek-v4-pro`
   is chat-completions-only.
-- Support is per-model, so a client built on `responses` would work for 7 models
-  and fail for 143. Chat completions works for all of them.
+- A client built on `responses` would work for 7 models and fail for 143. Chat
+  completions works for all of them.
 
-Correcting the sentence in CLAUDE.md is outside this prompt's scope and is
-recorded in `docs/notes/observations.md`.
+CLAUDE.md previously said Novita did not support the Responses API at all. It
+was corrected by hand on 2026-08-24 and now states the per-model position, with
+the instruction to revisit if a routed model ever advertises `responses`.
 
 ## Consequences
 

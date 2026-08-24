@@ -12,6 +12,11 @@ the commit that did it. Do not delete entries.
 
 ## 2026-08-24 — CLAUDE.md's Responses API claim is false
 
+**Resolved by the user**, 2026-08-24. CLAUDE.md now states the per-model
+position and says to revisit if a routed model ever advertises `responses`.
+The probe methodology that produced the wrong conclusion is recorded in
+ADR 0004 under *Probe methodology*, as its own section, so it survives.
+
 CLAUDE.md states: *"Novita does NOT support the Responses API. Chat completions
 only."*
 
@@ -35,6 +40,10 @@ rather than made.
 
 ## 2026-08-24 — Fallback models were chosen, not specified
 
+**Confirmed**, 2026-08-24: kept as assigned, all five. The rule stands —
+a different vendor where one exists, and a context window no smaller than
+the caller sized for.
+
 The prompt named the five primaries. It did not name fallbacks, and every role
 needs one. These were chosen and are **unconfirmed**:
 
@@ -54,6 +63,14 @@ smaller than the caller sized its prompt for. Changing any of them is one
 Also worth a decision: `zai-org/glm-5.3` exists, is the same price as 5.2
 (\$1.4/\$4.4 per Mtok), has the same 1M context, and is the newer model. It was
 not substituted, because the prompt said GLM 5.2.
+
+**Decided**, 2026-08-24: not substituted. Newer at the same price is a spec
+sheet, not evidence. It is recorded in `config/models.yaml` under
+`bakeoff_candidates.planner`, alongside the incumbent 5.2, for the bake-off
+harness (P5) to decide. Nothing reads that key at runtime; two tests keep it
+honest — every candidate must still be listed by the provider, and the assigned
+primary must be among its own candidates, because a comparison without the
+incumbent has no baseline to beat.
 ---
 
 ## 2026-08-24 — P4 stopped at the live probe: no Novita key

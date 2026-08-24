@@ -56,7 +56,7 @@ scikit-learn model. Do not add them.
 ## Novita
 - Base URL https://api.novita.ai/openai/v1 . Their docs also show /openai and
   /v3/openai. Verify with a real /models call and record it in an ADR.
-- Novita does NOT support the Responses API. Chat completions only.
+- Novita supports the Responses API on a small minority of models (7 of 150 as of Aug 2026), and none of our five routed models are among them. Support is per-model, not per-provider. Use chat completions. If a future routed model advertises responses in its endpoints array, revisit this rather than assuming.
 - Never type a model id from memory. Read it from config/models.yaml, which is
   populated from the live /models endpoint.
 
