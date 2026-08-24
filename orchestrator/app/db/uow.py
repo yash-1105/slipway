@@ -10,6 +10,7 @@ from app.db.repositories import (
     SqlApprovalRepository,
     SqlArtifactRepository,
     SqlCostRepository,
+    SqlDeploymentRepository,
     SqlEventRepository,
     SqlJobRepository,
     SqlPortAllocationRepository,
@@ -39,6 +40,7 @@ class SqlUnitOfWork:
         self.artifacts = SqlArtifactRepository(session)
         self.ports = SqlPortAllocationRepository(session)
         self.costs = SqlCostRepository(session)
+        self.deployments = SqlDeploymentRepository(session)
         return self
 
     async def __aexit__(

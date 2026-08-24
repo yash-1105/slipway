@@ -107,9 +107,12 @@ a live worker id, and the leased count should be falling.
 
 ## Orphan cleanup
 
-**Symptom.** Containers, compose projects or allocated ports exist that no live
-run owns — usually after a crash between recording an identifier and finishing
-the operation.
+**Symptom.** Containers or held ports exist that no live run owns — usually
+after a crash between recording an identifier and finishing the operation, or a
+container removed by hand.
+
+Reconciliation repairs both directions: a container nothing claims is removed,
+and a record whose container has vanished is settled and its port released.
 
 **Confirm.** The reconciler reports and does not act:
 
@@ -201,20 +204,29 @@ but nothing writes to it, so there is no recorded history to roll back *to*, and
 `ComposeOverSshDeployer.rollback` returns a failure value saying the deployer
 keeps no history.
 
-**What you can actually do.** Deployed applications are compose projects on the
-deploy host, named `slipway-<deployment-id>`:
+**What you can actually do.** Previews are local Docker containers named
+`slipway-preview-<deployment-id>`:
 
-    ssh "$SLIPWAY_DEPLOY_SSH_USER@$SLIPWAY_DEPLOY_SSH_HOST" 'docker compose ls --all'
+    docker ps --all --filter label=slipway.managed=true
 
-To take a bad deployment down:
+The record behind one, including the port it holds:
 
-    ssh "$SLIPWAY_DEPLOY_SSH_USER@$SLIPWAY_DEPLOY_SSH_HOST" \
-      'cd "$SLIPWAY_DEPLOY_REMOTE_ROOT/slipway-<deployment-id>" && docker compose down'
+    psql "$DB" -c "
+      SELECT id, run_id, status, port, container_name, url, destroyed_at
+      FROM deployments WHERE destroyed_at IS NULL ORDER BY created_at DESC;"
 
-Then release its port so the range does not leak:
+To take a bad preview down, remove the container and let the reconciler settle
+the record and release the port:
 
+    docker rm --force slipway-preview-<deployment-id>
     slipway reconcile --dry-run
     slipway reconcile --apply
+
+Do not delete the `deployments` row by hand. `destroyed_at` is what releases the
+port, and the reconciler sets it as part of recording what happened.
+
+There is no supported way to put a previous version back. If a preview is bad,
+take it down, or run the pipeline again from the brief.
 
 There is no supported way to put a previous version back. If a deployed
 application is bad, the honest options are to take it down, or to run the

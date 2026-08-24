@@ -33,6 +33,7 @@ from app.runtimes.base import GraphRuntime
 from app.runtimes.factory import build_runtime
 from app.sandbox.base import Sandbox
 from app.sandbox.factory import build_sandbox
+from app.services.deploys import DeployService
 from app.services.health import HealthService
 from app.services.jobs import JobService
 from app.services.migrations import MigrationService
@@ -63,6 +64,7 @@ class Container:
     jobs: JobService
     ports: PortAllocator
     reconciler: Reconciler
+    deploys: DeployService
 
     async def aclose(self) -> None:
         await self.engine.dispose()
@@ -125,6 +127,13 @@ def build_container(settings: Settings, *, prompts_root: Path | None = None) -> 
             uow_factory,
             start=settings.deploy_port_range_start,
             end=settings.deploy_port_range_end,
+        ),
+        deploys=DeployService(
+            uow_factory,
+            deployer,
+            host=settings.deploy_public_host,
+            port_range=(settings.deploy_port_range_start, settings.deploy_port_range_end),
+            timeout_seconds=settings.deploy_timeout_seconds,
         ),
         reconciler=Reconciler(
             uow_factory,

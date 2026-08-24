@@ -196,20 +196,23 @@ async def test_a_deploy_allocates_a_port_and_a_url(container: Container, worker:
     await container.runs.decide(run.id, Gate.DEPLOY, approved=True, decided_by="yash")
     await drain(worker, container)
 
+    # The port now lives on the deployment record itself, held by the partial
+    # unique index while destroyed_at is NULL.
     async with container.uow() as uow:
-        allocations = await uow.ports.list_active(host="127.0.0.1")
+        records = await uow.deployments.list_holding_ports(host="127.0.0.1")
 
-    assert len(allocations) == 1
-    assert allocations[0].run_id == run.id
+    assert len(records) == 1
+    assert records[0].run_id == run.id
+    assert records[0].container_name, "the container name is recorded before it exists"
     assert (
         container.settings.deploy_port_range_start
-        <= allocations[0].port
+        <= records[0].port
         <= container.settings.deploy_port_range_end
     )
 
     live = await container.deployer.list_live()
     assert len(live) == 1
-    assert live[0].url.endswith(str(allocations[0].port))
+    assert live[0].url.endswith(str(records[0].port))
 
 
 async def test_two_runs_never_share_a_port(container: Container, worker: Worker) -> None:
@@ -224,7 +227,7 @@ async def test_two_runs_never_share_a_port(container: Container, worker: Worker)
         await drain(worker, container)
 
     async with container.uow() as uow:
-        ports = [a.port for a in await uow.ports.list_active(host="127.0.0.1")]
+        ports = [d.port for d in await uow.deployments.list_holding_ports(host="127.0.0.1")]
 
     assert len(ports) == 3
     assert len(set(ports)) == 3

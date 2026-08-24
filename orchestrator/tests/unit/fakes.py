@@ -16,6 +16,8 @@ from app.domain.entities import (
     Approval,
     ArtifactRef,
     CostEntry,
+    DeploymentRecord,
+    DeploymentStatus,
     Event,
     Gate,
     Job,
@@ -39,6 +41,7 @@ class InMemoryStore:
         self.artifacts: list[ArtifactRef] = []
         self.ports: dict[UUID, PortAllocation] = {}
         self.costs: list[CostEntry] = []
+        self.deployments: dict[UUID, DeploymentRecord] = {}
 
 
 class _Runs:
@@ -212,6 +215,59 @@ class _Costs:
         return [c for c in self._s.costs if c.run_id == run_id]
 
 
+class _Deployments:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._s = store
+
+    async def claim_port(self, record: DeploymentRecord) -> DeploymentRecord | None:
+        for existing in self._s.deployments.values():
+            if existing.port == record.port and existing.destroyed_at is None:
+                return None
+        self._s.deployments[record.id] = record
+        return record
+
+    async def get(self, deployment_id: UUID) -> DeploymentRecord | None:
+        return self._s.deployments.get(deployment_id)
+
+    async def settle(
+        self,
+        deployment_id: UUID,
+        *,
+        status: DeploymentStatus,
+        url: str | None = None,
+        container_id: str | None = None,
+        log: str | None = None,
+        release_port: bool = False,
+    ) -> DeploymentRecord | None:
+        from dataclasses import replace
+        from datetime import UTC
+
+        record = self._s.deployments.get(deployment_id)
+        if record is None:
+            return None
+        now = datetime.now(UTC)
+        updated = replace(
+            record,
+            status=status,
+            url=url if url is not None else record.url,
+            container_id=container_id if container_id is not None else record.container_id,
+            log=log if log is not None else record.log,
+            settled_at=now,
+            destroyed_at=now if release_port else record.destroyed_at,
+        )
+        self._s.deployments[deployment_id] = updated
+        return updated
+
+    async def list_holding_ports(self, *, host: str) -> list[DeploymentRecord]:
+        return [
+            d for d in self._s.deployments.values()
+            if d.host == host and d.destroyed_at is None
+        ]
+
+    async def list_for_run(self, run_id: UUID) -> list[DeploymentRecord]:
+        return [d for d in self._s.deployments.values() if d.run_id == run_id]
+
+
 class InMemoryUnitOfWork:
     """Implements app.domain.repositories.UnitOfWork over an InMemoryStore.
 
@@ -229,6 +285,7 @@ class InMemoryUnitOfWork:
         self.artifacts = _Artifacts(store)
         self.ports = _Ports(store)
         self.costs = _Costs(store)
+        self.deployments = _Deployments(store)
         self.commits = 0
 
     async def __aenter__(self) -> InMemoryUnitOfWork:

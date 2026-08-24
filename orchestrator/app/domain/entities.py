@@ -183,6 +183,49 @@ class CostEntry:
         return self.prompt_tokens + self.completion_tokens
 
 
+class DeploymentStatus(enum.StrEnum):
+    """Where a deployment is. Mirrors the CHECK in migration 0003."""
+
+    RECORDING = "recording"   # the row exists; the container does not yet
+    LIVE = "live"
+    FAILED = "failed"
+    SUPERSEDED = "superseded"
+    TORN_DOWN = "torn_down"
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentRecord:
+    """A preview deployment, as the database knows it.
+
+    `container_name` is written before the container is created, so a crash
+    mid-deploy leaves a row naming something the reconciler can look for. The
+    reverse -- a container with no row -- is the case that cannot be recovered.
+
+    `destroyed_at` is what holds the port: while it is NULL this row owns its
+    port, enforced by a partial unique index rather than by anyone remembering.
+    """
+
+    id: UUID
+    run_id: UUID
+    status: DeploymentStatus
+    host: str
+    port: int
+    project_name: str
+    artifact_uri: str
+    created_at: datetime
+    container_name: str | None = None
+    container_id: str | None = None
+    image_tag: str | None = None
+    url: str | None = None
+    log: str | None = None
+    settled_at: datetime | None = None
+    destroyed_at: datetime | None = None
+
+    @property
+    def holds_its_port(self) -> bool:
+        return self.destroyed_at is None
+
+
 @dataclass(frozen=True, slots=True)
 class PortAllocation:
     """A port on the deploy host, owned by exactly one run.

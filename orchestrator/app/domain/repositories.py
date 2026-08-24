@@ -16,6 +16,8 @@ from app.domain.entities import (
     Approval,
     ArtifactRef,
     CostEntry,
+    DeploymentRecord,
+    DeploymentStatus,
     Event,
     Gate,
     Job,
@@ -110,6 +112,41 @@ class CostRepository(Protocol):
     async def list_for_run(self, run_id: UUID) -> list[CostEntry]: ...
 
 
+class DeploymentRepository(Protocol):
+    async def claim_port(self, record: DeploymentRecord) -> DeploymentRecord | None:
+        """Insert a deployment holding `record.port`.
+
+        Returns None if the port is already held by a live deployment. Losing is
+        a normal outcome, not an error: the caller tries the next port. Nothing
+        anywhere scans for a port that looks free, because two processes asking
+        that question at the same moment get the same answer.
+        """
+
+    async def get(self, deployment_id: UUID) -> DeploymentRecord | None: ...
+
+    async def settle(
+        self,
+        deployment_id: UUID,
+        *,
+        status: DeploymentStatus,
+        url: str | None = None,
+        container_id: str | None = None,
+        log: str | None = None,
+        release_port: bool = False,
+    ) -> DeploymentRecord | None:
+        """Record how a deployment turned out.
+
+        `release_port` sets destroyed_at, which is the only way a port comes
+        back. Making it part of settling means releasing the port and recording
+        the failure are one operation rather than two, and the second cannot be
+        forgotten.
+        """
+
+    async def list_holding_ports(self, *, host: str) -> list[DeploymentRecord]: ...
+
+    async def list_for_run(self, run_id: UUID) -> list[DeploymentRecord]: ...
+
+
 class UnitOfWork(Protocol):
     """One transaction spanning several repositories.
 
@@ -138,6 +175,9 @@ class UnitOfWork(Protocol):
 
     @property
     def costs(self) -> CostRepository: ...
+
+    @property
+    def deployments(self) -> DeploymentRepository: ...
 
     async def __aenter__(self) -> UnitOfWork: ...
 

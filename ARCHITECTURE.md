@@ -72,13 +72,23 @@ failed container build returns a `BuildResult` carrying the log.
   reconcilable either way. Only `factory.py` learns the new name.
 
 ### deploy — publishing the built application
-- **V1:** `docker compose` over SSH to the one server, one compose project per
-  run. Ports are allocated by inserting into a table with a unique constraint,
-  never by scanning for a free one.
-- **V2:** a scheduler (Kubernetes or Nomad) with real rollouts and rollback.
-- **At migration:** the port allocator becomes unnecessary and its table is
-  retired; `DeployResult` already carries a URL and an opaque deployment id, so
-  the reconciliation loop keeps working against a different backend.
+- **V1:** a local Docker container per preview, built from the project's own
+  Dockerfile. Ports are claimed by inserting a `deployments` row and losing to a
+  partial unique index, never by scanning for a free one. Build-time variables
+  (`VITE_`, `NEXT_PUBLIC_`, `PUBLIC_`, `REACT_APP_`) are passed as build args:
+  a framework that inlines them into the bundle gets nothing from the same name
+  supplied at run time, and the deploy is silently wrong rather than broken.
+  An image with no `HEALTHCHECK` is a deploy failure naming the fix, because
+  Docker calls such a container healthy the moment it starts.
+- **V2:** a scheduler (Kubernetes or Nomad), or compose over SSH to a shared
+  host, with real rollouts and rollback.
+- **At migration:** `DeployResult` already carries a URL and an opaque
+  deployment id, and reconciliation already compares the store to what the
+  backend can see in both directions, so it keeps working against a different
+  one. There is no `rollback` on the Protocol: rolling back means re-deploying a
+  *recorded* target, which a component with no store cannot do. It belongs to a
+  service, and declaring it on the seam produced an implementation whose only
+  behaviour was to explain that it could not be implemented.
 
 ### artifacts — storing specs, logs, bundles and images
 - **V1:** local filesystem under a configured root, addressed by URI, with

@@ -9,15 +9,13 @@ from app.domain.errors import ConfigError
 
 def build_deployer(settings: Settings) -> Deployer:
     backend = settings.deploy_backend
-    if backend == "compose_ssh":
-        from app.deploy.impl.compose_ssh import ComposeOverSshDeployer
+    if backend == "local_container":
+        from app.deploy.impl.local_container import LocalContainerDeployer
 
-        return ComposeOverSshDeployer(
-            ssh_host=settings.deploy_ssh_host,
-            ssh_user=settings.deploy_ssh_user,
-            remote_root=settings.deploy_remote_root,
+        return LocalContainerDeployer(
+            docker_binary=settings.docker_binary,
             public_host=settings.deploy_public_host,
-            ssh_binary=settings.ssh_binary,
+            health_timeout_seconds=settings.deploy_health_timeout_seconds,
         )
     if backend == "fake":
         from app.deploy.impl.fake import FakeDeployer

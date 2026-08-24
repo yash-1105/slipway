@@ -41,9 +41,10 @@ def test_novita_backend_without_a_key_is_refused() -> None:
         settings(models_backend="novita", novita_api_key="")
 
 
-def test_compose_ssh_deploy_without_a_host_is_refused() -> None:
-    with pytest.raises(ConfigError, match="SLIPWAY_DEPLOY_SSH_HOST"):
-        settings(deploy_backend="compose_ssh")
+def test_local_container_deploy_without_a_public_host_is_refused() -> None:
+    """The public host is what appears in the URL handed to a reviewer."""
+    with pytest.raises(ConfigError, match="SLIPWAY_DEPLOY_PUBLIC_HOST"):
+        settings(deploy_backend="local_container", deploy_public_host="")
 
 
 def test_every_problem_is_reported_at_once() -> None:
@@ -53,12 +54,13 @@ def test_every_problem_is_reported_at_once() -> None:
             database_url="mysql://nope",
             models_backend="novita",
             novita_api_key="",
-            deploy_backend="compose_ssh",
+            deploy_backend="local_container",
+            deploy_public_host="",
         )
     message = str(caught.value)
     assert "postgresql+asyncpg" in message
     assert "SLIPWAY_NOVITA_API_KEY" in message
-    assert "SLIPWAY_DEPLOY_SSH_HOST" in message
+    assert "SLIPWAY_DEPLOY_PUBLIC_HOST" in message
 
 
 def test_a_lease_shorter_than_the_poll_interval_is_refused() -> None:

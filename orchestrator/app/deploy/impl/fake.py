@@ -34,14 +34,6 @@ class FakeDeployer(Deployer):
         self._live[target.deployment_id] = deployment
         return deployment
 
-    async def rollback(
-        self, run_id: UUID, to_deployment_id: UUID, *, timeout_seconds: float
-    ) -> DeployResult:
-        previous = self._live.get(to_deployment_id)
-        if previous is None:
-            return DeployFailure("unreachable", f"no recorded deployment {to_deployment_id}")
-        return previous
-
     async def teardown(self, deployment_id: UUID, *, timeout_seconds: float) -> None:
         self._live.pop(deployment_id, None)
 

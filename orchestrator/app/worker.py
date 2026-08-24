@@ -206,11 +206,7 @@ class Worker:
                 await uow.commit()
 
     async def _deploy(self, job: Job) -> None:
-        from app.deploy.base import DeployFailure, DeploymentTarget
-        from app.domain.ids import uuid7
-
-        settings = self._settings
-        host = settings.deploy_public_host
+        from app.deploy.base import DeployFailure
 
         # Before anything is allocated. Deploying whatever artifact happens to
         # exist produced a URL that served nothing: the previous version fell
@@ -231,25 +227,17 @@ class Worker:
             await self._advance(self._c.runs, job.run_id, Trigger.DEPLOY_FAILED, detail=detail)
             return
 
-        allocation = await self._c.ports.allocate(job.run_id, host=host)
-        deployment_id = uuid7()
-
-        # The identifier exists in our world before it exists on the server, so
-        # a crash inside `deploy` leaves something the reconciler can find.
-        target = DeploymentTarget(
-            run_id=job.run_id,
-            deployment_id=deployment_id,
-            host=host,
-            project_name=f"slipway-{deployment_id}",
-            port=allocation.port,
-        )
-
-        result = await self._c.deployer.deploy(
-            target, artifact_uri, timeout_seconds=settings.deploy_timeout_seconds
+        # DeployService claims the port by inserting, writes the deployment row
+        # with the container's name in it before anything is created, and gives
+        # the port back as part of recording a failure. The worker does none of
+        # that itself, so there is one place the ordering can be got wrong.
+        result = await self._c.deploys.deploy(
+            job.run_id,
+            context_path=_context_path_for(artifact_uri),
+            artifact_uri=artifact_uri,
         )
 
         if isinstance(result, DeployFailure):
-            await self._c.ports.release(allocation.id)
             will_retry = await self._c.jobs.fail(job, f"{result.reason}: {result.detail}")
             if not will_retry:
                 await self._advance(
@@ -328,3 +316,21 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _context_path_for(artifact_uri: str) -> str:
+    """The directory the deployer builds from.
+
+    A `file://` bundle is unpacked next to itself by the build stage; until a
+    builder agent exists there is nothing to unpack, and the deploy job refuses
+    before it reaches here. Kept as one function so that when P9 lands there is
+    a single place that decides what a bundle URI means on disk.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(artifact_uri)
+    if parsed.scheme != "file":
+        return ""
+    from pathlib import Path as _Path
+
+    return str(_Path(parsed.path).parent)

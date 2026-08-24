@@ -15,6 +15,8 @@ from app.domain.entities import (
     Approval,
     ArtifactRef,
     CostEntry,
+    DeploymentRecord,
+    DeploymentStatus,
     Event,
     Gate,
     Job,
@@ -351,6 +353,107 @@ class SqlArtifactRepository:
         return [_to_artifact(dict(r)) for r in rows]
 
 
+class SqlDeploymentRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def claim_port(self, record: DeploymentRecord) -> DeploymentRecord | None:
+        try:
+            async with self._s.begin_nested():
+                await self._s.execute(
+                    insert(t.deployments).values(
+                        id=record.id,
+                        run_id=record.run_id,
+                        status=record.status.value,
+                        host=record.host,
+                        port=record.port,
+                        project_name=record.project_name,
+                        artifact_uri=record.artifact_uri,
+                        container_name=record.container_name,
+                        container_id=record.container_id,
+                        image_tag=record.image_tag,
+                        url=record.url,
+                        log=record.log,
+                        created_at=record.created_at,
+                    )
+                )
+        except IntegrityError:
+            # The partial unique index says a live deployment already holds
+            # this port. Losing is normal: the caller tries the next one.
+            return None
+        return record
+
+    async def get(self, deployment_id: UUID) -> DeploymentRecord | None:
+        result = await self._s.execute(
+            select(t.deployments).where(t.deployments.c.id == deployment_id)
+        )
+        row = result.mappings().first()
+        return _to_deployment(dict(row)) if row else None
+
+    async def settle(
+        self,
+        deployment_id: UUID,
+        *,
+        status: DeploymentStatus,
+        url: str | None = None,
+        container_id: str | None = None,
+        log: str | None = None,
+        release_port: bool = False,
+    ) -> DeploymentRecord | None:
+        now = datetime.now(UTC)
+        values: dict[str, object] = {"status": status.value, "settled_at": now}
+        if url is not None:
+            values["url"] = url
+        if container_id is not None:
+            values["container_id"] = container_id
+        if log is not None:
+            values["log"] = log
+        if release_port:
+            # The only thing that gives a port back. Doing it here means
+            # releasing the port and recording the outcome are one statement.
+            values["destroyed_at"] = now
+
+        result = await self._s.execute(
+            update(t.deployments)
+            .where(t.deployments.c.id == deployment_id)
+            .values(**values)
+            .returning(t.deployments)
+        )
+        row = result.mappings().first()
+        return _to_deployment(dict(row)) if row else None
+
+    async def list_holding_ports(self, *, host: str) -> list[DeploymentRecord]:
+        rows = (
+            (
+                await self._s.execute(
+                    select(t.deployments).where(
+                        and_(
+                            t.deployments.c.host == host,
+                            t.deployments.c.destroyed_at.is_(None),
+                        )
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_to_deployment(dict(r)) for r in rows]
+
+    async def list_for_run(self, run_id: UUID) -> list[DeploymentRecord]:
+        rows = (
+            (
+                await self._s.execute(
+                    select(t.deployments)
+                    .where(t.deployments.c.run_id == run_id)
+                    .order_by(t.deployments.c.id)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_to_deployment(dict(r)) for r in rows]
+
+
 class SqlCostRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
@@ -452,6 +555,30 @@ class SqlPortAllocationRepository:
         ]
 
 
+def _to_deployment(row: dict[str, object]) -> DeploymentRecord:
+    def maybe(key: str) -> str | None:
+        value = row.get(key)
+        return None if value is None else str(value)
+
+    return DeploymentRecord(
+        id=row["id"],  # type: ignore[arg-type]
+        run_id=row["run_id"],  # type: ignore[arg-type]
+        status=DeploymentStatus(str(row["status"])),
+        host=str(row["host"]),
+        port=int(row["port"]),  # type: ignore[call-overload]
+        project_name=str(row["project_name"]),
+        artifact_uri=str(row["artifact_uri"]),
+        created_at=row["created_at"],  # type: ignore[arg-type]
+        container_name=maybe("container_name"),
+        container_id=maybe("container_id"),
+        image_tag=maybe("image_tag"),
+        url=maybe("url"),
+        log=maybe("log"),
+        settled_at=row.get("settled_at"),  # type: ignore[arg-type]
+        destroyed_at=row.get("destroyed_at"),  # type: ignore[arg-type]
+    )
+
+
 def _cost_values(entry: CostEntry) -> dict[str, object]:
     return {
         "id": entry.id,
@@ -535,6 +662,7 @@ __all__ = [
     "SqlApprovalRepository",
     "SqlArtifactRepository",
     "SqlCostRepository",
+    "SqlDeploymentRepository",
     "SqlEventRepository",
     "SqlJobRepository",
     "SqlPortAllocationRepository",

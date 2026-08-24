@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ModelsBackend = Literal["novita", "fake"]
 RuntimeBackend = Literal["langgraph_local", "fake"]
 SandboxBackend = Literal["docker", "fake"]
-DeployBackend = Literal["compose_ssh", "fake"]
+DeployBackend = Literal["local_container", "fake"]
 ArtifactsBackend = Literal["local_fs", "memory"]
 
 
@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     models_backend: ModelsBackend = "novita"
     runtime_backend: RuntimeBackend = "langgraph_local"
     sandbox_backend: SandboxBackend = "docker"
-    deploy_backend: DeployBackend = "compose_ssh"
+    deploy_backend: DeployBackend = "local_container"
     artifacts_backend: ArtifactsBackend = "local_fs"
 
     # --- models seam -------------------------------------------------------
@@ -78,12 +78,13 @@ class Settings(BaseSettings):
     sandbox_exec_timeout_seconds: float = 900.0
 
     # --- deploy seam -------------------------------------------------------
-    ssh_binary: str = "ssh"
-    deploy_ssh_host: str = ""
-    deploy_ssh_user: str = ""
-    deploy_public_host: str = ""
-    deploy_remote_root: str = ""
+    #: The host that appears in a preview URL. Containers publish on loopback,
+    #: so this is 127.0.0.1 on a laptop and the tunnel's hostname when a client
+    #: is being shown something.
+    deploy_public_host: str = "127.0.0.1"
     deploy_timeout_seconds: float = 600.0
+    #: How long to wait for a container's own HEALTHCHECK to pass.
+    deploy_health_timeout_seconds: float = 120.0
     deploy_port_range_start: int = 41000
     deploy_port_range_end: int = 41999
 
@@ -140,19 +141,12 @@ class Settings(BaseSettings):
                 "rate it was converted at and there is no sensible default"
             )
 
-        if self.deploy_backend == "compose_ssh":
-            required = (
-                "deploy_ssh_host",
-                "deploy_ssh_user",
-                "deploy_public_host",
-                "deploy_remote_root",
+        if self.deploy_backend == "local_container" and not self.deploy_public_host:
+            problems.append(
+                "SLIPWAY_DEPLOY_PUBLIC_HOST is required when "
+                "SLIPWAY_DEPLOY_BACKEND=local_container; it is the host that "
+                "appears in the URL handed to a reviewer"
             )
-            for name in required:
-                if not getattr(self, name):
-                    problems.append(
-                        f"SLIPWAY_{name.upper()} is required when "
-                        "SLIPWAY_DEPLOY_BACKEND=compose_ssh"
-                    )
 
         if self.deploy_port_range_start >= self.deploy_port_range_end:
             problems.append(

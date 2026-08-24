@@ -30,8 +30,9 @@ make check            # ruff, mypy strict, import-linter, env access, unit tests
 ```
 
 A fresh checkout runs against the fake seams, so it boots with no credentials.
-Export `SLIPWAY_NOVITA_API_KEY` and the models seam switches to Novita; export
-`SLIPWAY_DEPLOY_SSH_HOST` and the deploy seam switches to compose-over-SSH.
+Export `SLIPWAY_NOVITA_API_KEY` and the models seam switches to Novita. The
+deploy seam builds previews as local Docker containers; it needs a running
+Docker daemon and nothing else.
 
 Before the first real run:
 

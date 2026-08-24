@@ -18,7 +18,7 @@ from uuid import UUID
 import structlog
 
 from app.deploy.base import Deployer
-from app.domain.entities import RunState
+from app.domain.entities import DeploymentStatus, RunState
 from app.domain.repositories import UnitOfWork
 from app.sandbox.base import Sandbox, SandboxHandle
 
@@ -33,17 +33,28 @@ class Discrepancy:
     subject: str
     detail: str
     run_id: UUID | None = None
+    deployment_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ReconcileReport:
     orphan_sandboxes: list[Discrepancy] = field(default_factory=list)
+    #: A container exists that no live record claims. Created behind our back,
+    #: or left by a crash between `docker run` and the row being settled.
     orphan_deployments: list[Discrepancy] = field(default_factory=list)
+    #: A record still holding its port whose container is gone -- removed by
+    #: hand, or by a `docker system prune`. The port is being held for nothing.
+    vanished_deployments: list[Discrepancy] = field(default_factory=list)
     stale_port_allocations: list[Discrepancy] = field(default_factory=list)
 
     @property
     def all(self) -> list[Discrepancy]:
-        return [*self.orphan_sandboxes, *self.orphan_deployments, *self.stale_port_allocations]
+        return [
+            *self.orphan_sandboxes,
+            *self.orphan_deployments,
+            *self.vanished_deployments,
+            *self.stale_port_allocations,
+        ]
 
     @property
     def is_clean(self) -> bool:
@@ -101,16 +112,45 @@ class Reconciler:
             if handle.run_id not in building_runs
         ]
 
-        live_deployments = await self._deployer.list_live()
+        # Both directions, against the store rather than against a guess.
+        async with self._uow() as uow:
+            records = await uow.deployments.list_holding_ports(host=self._deploy_host)
+        by_id = {record.id: record for record in records}
+
+        containers = await self._deployer.list_live()
+        seen_ids = {container.deployment_id for container in containers}
+
+        # Direction 1: a container with no live record claiming it.
         orphan_deployments = [
             Discrepancy(
                 kind="deployment",
-                subject=deployment.project_name,
-                detail="compose project exists but its run failed, was cancelled, or is unknown",
-                run_id=deployment.run_id,
+                subject=container.project_name,
+                detail=(
+                    "container exists but no live deployment record claims it"
+                    if container.deployment_id not in by_id
+                    else "container exists but its run failed, was cancelled, or is unknown"
+                ),
+                run_id=container.run_id,
+                deployment_id=container.deployment_id,
             )
-            for deployment in live_deployments
-            if deployment.run_id not in entitled_runs
+            for container in containers
+            if container.deployment_id not in by_id or container.run_id not in entitled_runs
+        ]
+
+        # Direction 2: a record holding a port whose container is gone. The
+        # record is the only thing keeping that port allocated.
+        vanished_deployments = [
+            Discrepancy(
+                kind="deployment_record",
+                subject=record.container_name or str(record.id),
+                detail=(
+                    f"record holds port {record.port} but its container no longer exists"
+                ),
+                run_id=record.run_id,
+                deployment_id=record.id,
+            )
+            for record in records
+            if record.status is DeploymentStatus.LIVE and record.id not in seen_ids
         ]
 
         stale_ports = [
@@ -127,6 +167,7 @@ class Reconciler:
         return ReconcileReport(
             orphan_sandboxes=orphan_sandboxes,
             orphan_deployments=orphan_deployments,
+            vanished_deployments=vanished_deployments,
             stale_port_allocations=stale_ports,
         )
 
@@ -148,12 +189,31 @@ class Reconciler:
             log.info("reconcile.sandbox_removed", container=discrepancy.subject)
 
         for discrepancy in report.orphan_deployments:
-            if discrepancy.run_id is None:
+            # Keyed on the deployment id, not the run id. An earlier version
+            # passed run_id to teardown(), which addresses containers by
+            # deployment id -- so it tore down nothing, or something else.
+            if discrepancy.deployment_id is None:
                 continue
             await self._deployer.teardown(
-                discrepancy.run_id, timeout_seconds=self._teardown_timeout
+                discrepancy.deployment_id, timeout_seconds=self._teardown_timeout
             )
             log.info("reconcile.deployment_torn_down", project=discrepancy.subject)
+
+        # A record whose container is gone: settle it and give the port back.
+        # Nothing is destroyed here -- the container already is.
+        if report.vanished_deployments:
+            async with self._uow() as uow:
+                for discrepancy in report.vanished_deployments:
+                    if discrepancy.deployment_id is None:
+                        continue
+                    await uow.deployments.settle(
+                        discrepancy.deployment_id,
+                        status=DeploymentStatus.TORN_DOWN,
+                        log="reconciled: the container no longer exists",
+                        release_port=True,
+                    )
+                    log.info("reconcile.record_settled", subject=discrepancy.subject)
+                await uow.commit()
 
         if report.stale_port_allocations:
             async with self._uow() as uow:

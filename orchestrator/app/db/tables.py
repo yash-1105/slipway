@@ -106,6 +106,10 @@ deployments = Table(
     Column("log", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("settled_at", DateTime(timezone=True)),
+    Column("container_name", Text),
+    Column("container_id", Text),
+    Column("destroyed_at", DateTime(timezone=True)),
+    Column("image_tag", Text),
 )
 
 port_allocations = Table(
