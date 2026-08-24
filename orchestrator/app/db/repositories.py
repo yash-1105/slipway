@@ -21,7 +21,6 @@ from app.domain.entities import (
     Gate,
     Job,
     JobStatus,
-    PortAllocation,
     Run,
     RunState,
 )
@@ -486,75 +485,6 @@ class SqlCostRepository:
         return [_to_cost_entry(dict(r)) for r in rows]
 
 
-class SqlPortAllocationRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self._s = session
-
-    async def allocate(self, *, run_id: UUID, host: str, port: int) -> PortAllocation | None:
-        from app.domain.ids import uuid7
-
-        now = datetime.now(UTC)
-        allocation = PortAllocation(
-            id=uuid7(), run_id=run_id, host=host, port=port, allocated_at=now
-        )
-        try:
-            async with self._s.begin_nested():
-                await self._s.execute(
-                    insert(t.port_allocations).values(
-                        id=allocation.id,
-                        run_id=run_id,
-                        host=host,
-                        port=port,
-                        allocated_at=now,
-                    )
-                )
-        except IntegrityError:
-            # The partial unique index says this port is already held. Losing
-            # is a normal outcome here, not an error: the caller tries the next
-            # port in its range.
-            return None
-        return allocation
-
-    async def release(self, allocation_id: UUID) -> None:
-        await self._s.execute(
-            update(t.port_allocations)
-            .where(
-                and_(
-                    t.port_allocations.c.id == allocation_id,
-                    t.port_allocations.c.released_at.is_(None),
-                )
-            )
-            .values(released_at=datetime.now(UTC))
-        )
-
-    async def list_active(self, *, host: str) -> list[PortAllocation]:
-        rows = (
-            (
-                await self._s.execute(
-                    select(t.port_allocations).where(
-                        and_(
-                            t.port_allocations.c.host == host,
-                            t.port_allocations.c.released_at.is_(None),
-                        )
-                    )
-                )
-            )
-            .mappings()
-            .all()
-        )
-        return [
-            PortAllocation(
-                id=r["id"],
-                run_id=r["run_id"],
-                host=r["host"],
-                port=r["port"],
-                allocated_at=r["allocated_at"],
-                released_at=r["released_at"],
-            )
-            for r in rows
-        ]
-
-
 def _to_deployment(row: dict[str, object]) -> DeploymentRecord:
     def maybe(key: str) -> str | None:
         value = row.get(key)
@@ -665,6 +595,5 @@ __all__ = [
     "SqlDeploymentRepository",
     "SqlEventRepository",
     "SqlJobRepository",
-    "SqlPortAllocationRepository",
     "SqlRunRepository",
 ]

@@ -253,40 +253,6 @@ async def test_a_gate_can_only_be_decided_once(uow_factory: UowFactory) -> None:
             await uow.commit()
 
 
-async def test_a_port_is_held_by_exactly_one_run(uow_factory: UowFactory) -> None:
-    """The constraint arbitrates, not a scan for what looks free."""
-    first_run = await _a_run(uow_factory)
-    second_run = await _a_run(uow_factory)
-
-    async with uow_factory() as uow:
-        won = await uow.ports.allocate(run_id=first_run.id, host="h", port=41000)
-        await uow.commit()
-    assert won is not None
-
-    async with uow_factory() as uow:
-        lost = await uow.ports.allocate(run_id=second_run.id, host="h", port=41000)
-        await uow.commit()
-
-    assert lost is None, "the second run must lose to the unique index"
-
-
-async def test_a_released_port_can_be_allocated_again(uow_factory: UowFactory) -> None:
-    run = await _a_run(uow_factory)
-
-    async with uow_factory() as uow:
-        first = await uow.ports.allocate(run_id=run.id, host="h", port=41001)
-        assert first is not None
-        await uow.ports.release(first.id)
-        await uow.commit()
-
-    async with uow_factory() as uow:
-        second = await uow.ports.allocate(run_id=run.id, host="h", port=41001)
-        await uow.commit()
-
-    assert second is not None
-    assert second.id != first.id
-
-
 async def test_recording_the_same_artifact_twice_is_one_row(uow_factory: UowFactory) -> None:
     from app.domain.entities import ArtifactRef
 

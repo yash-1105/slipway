@@ -154,48 +154,75 @@ async def test_migrations_never_create_tables_outside_the_runner(engine: AsyncEn
 
     assert {
         "runs", "events", "approvals", "jobs", "artifacts",
-        "deployments", "port_allocations", "run_transitions", "schema_migrations",
+        "deployments", "run_transitions", "schema_migrations",
     } <= tables
 
 
-async def test_the_partial_unique_index_on_ports_allows_reuse_after_release(
+async def test_the_partial_unique_index_on_deployment_ports_allows_reuse(
     engine: AsyncEngine, clean_database: None
 ) -> None:
-    run = "01900000-0000-7000-8000-000000000008"
+    """One live deployment per port, and the port comes back when it is released.
+
+    Moved from port_allocations, which migration 0007 dropped: the port now
+    lives on the deployment row, so `destroyed_at` is both the release and the
+    record of how the deployment ended.
+    """
+    run = "01900000-0000-7000-8000-00000000000c"
     async with engine.begin() as conn:
         await conn.execute(
             text(f"INSERT INTO runs (id, brief, state) VALUES ('{run}', 'brief', 'created')")
         )
         await conn.execute(
             text(
-                "INSERT INTO port_allocations (id, run_id, host, port) VALUES "
-                f"('01900000-0000-7000-8000-000000000009', '{run}', 'h', 41000)"
+                "INSERT INTO deployments "
+                "(id, run_id, artifact_uri, project_name, host, port, status) VALUES "
+                f"('01900000-0000-7000-8000-00000000000d', '{run}', 'file:///a', 'p1', "
+                "'h', 41000, 'live')"
             )
         )
 
-    # A second live allocation of the same port loses.
+    # A second live deployment on the same port loses to the partial index.
     with pytest.raises(IntegrityError):
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "INSERT INTO port_allocations (id, run_id, host, port) VALUES "
-                    f"('01900000-0000-7000-8000-00000000000a', '{run}', 'h', 41000)"
+                    "INSERT INTO deployments "
+                    "(id, run_id, artifact_uri, project_name, host, port, status) VALUES "
+                    f"('01900000-0000-7000-8000-00000000000e', '{run}', 'file:///b', 'p2', "
+                    "'h', 41000, 'live')"
                 )
             )
 
-    # Once released, the port is free again.
+    # Once destroyed, the port is free again.
     async with engine.begin() as conn:
-        await conn.execute(text("UPDATE port_allocations SET released_at = now()"))
+        await conn.execute(text("UPDATE deployments SET destroyed_at = now()"))
         await conn.execute(
             text(
-                "INSERT INTO port_allocations (id, run_id, host, port) VALUES "
-                f"('01900000-0000-7000-8000-00000000000b', '{run}', 'h', 41000)"
+                "INSERT INTO deployments "
+                "(id, run_id, artifact_uri, project_name, host, port, status) VALUES "
+                f"('01900000-0000-7000-8000-00000000000f', '{run}', 'file:///c', 'p3', "
+                "'h', 41000, 'live')"
             )
         )
         live = (
             await conn.execute(
-                text("SELECT count(*) FROM port_allocations WHERE released_at IS NULL")
+                text("SELECT count(*) FROM deployments WHERE destroyed_at IS NULL")
             )
         ).scalar_one()
 
     assert live == 1
+
+
+async def test_the_dropped_table_is_gone(engine: AsyncEngine) -> None:
+    """Migration 0007 dropped it. Two mechanisms, one live, is the thing to avoid."""
+    async with engine.connect() as conn:
+        found = (
+            await conn.execute(
+                text(
+                    "SELECT count(*) FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = 'port_allocations'"
+                )
+            )
+        ).scalar_one()
+
+    assert found == 0

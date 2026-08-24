@@ -112,17 +112,6 @@ deployments = Table(
     Column("image_tag", Text),
 )
 
-port_allocations = Table(
-    "port_allocations",
-    metadata,
-    Column("id", UUID(as_uuid=True), primary_key=True),
-    Column("run_id", UUID(as_uuid=True), nullable=False),
-    Column("host", Text, nullable=False),
-    Column("port", Integer, nullable=False),
-    Column("allocated_at", DateTime(timezone=True), nullable=False),
-    Column("released_at", DateTime(timezone=True)),
-)
-
 cost_entries = Table(
     "cost_entries",
     metadata,

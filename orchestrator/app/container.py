@@ -38,7 +38,6 @@ from app.services.health import HealthService
 from app.services.jobs import JobService
 from app.services.migrations import MigrationService
 from app.services.models import ModelsService
-from app.services.ports import PortAllocator
 from app.services.reconcile import Reconciler
 from app.services.runs import RunService
 
@@ -62,7 +61,6 @@ class Container:
     migrations: MigrationService
     models_service: ModelsService
     jobs: JobService
-    ports: PortAllocator
     reconciler: Reconciler
     deploys: DeployService
 
@@ -123,11 +121,6 @@ def build_container(settings: Settings, *, prompts_root: Path | None = None) -> 
             models, catalogue, timeout_seconds=settings.model_timeout_seconds
         ),
         migrations=MigrationService(engine, REPO_ROOT / "orchestrator" / "migrations"),
-        ports=PortAllocator(
-            uow_factory,
-            start=settings.deploy_port_range_start,
-            end=settings.deploy_port_range_end,
-        ),
         deploys=DeployService(
             uow_factory,
             deployer,

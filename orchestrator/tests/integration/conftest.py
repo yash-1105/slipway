@@ -29,7 +29,6 @@ UowFactory = Callable[[], UnitOfWork]
 
 TABLES = (
     "run_transitions",
-    "port_allocations",
     "deployments",
     "artifacts",
     "jobs",

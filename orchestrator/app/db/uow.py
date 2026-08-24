@@ -13,7 +13,6 @@ from app.db.repositories import (
     SqlDeploymentRepository,
     SqlEventRepository,
     SqlJobRepository,
-    SqlPortAllocationRepository,
     SqlRunRepository,
 )
 
@@ -38,7 +37,6 @@ class SqlUnitOfWork:
         self.jobs = SqlJobRepository(session)
         self.approvals = SqlApprovalRepository(session)
         self.artifacts = SqlArtifactRepository(session)
-        self.ports = SqlPortAllocationRepository(session)
         self.costs = SqlCostRepository(session)
         self.deployments = SqlDeploymentRepository(session)
         return self

@@ -10,6 +10,7 @@ import pytest
 
 from app.artifacts.base import StoredArtifact
 from app.container import Container
+from app.deploy.base import Deployment
 from app.domain.entities import ArtifactRef, Gate, RunState
 from app.domain.ids import uuid7
 from app.worker import DEPLOYABLE_ARTIFACT_KIND, Worker
@@ -258,12 +259,15 @@ async def test_a_cancelled_run_leaves_its_deployment_reportable(
     """The other half of the rule: a run that did not survive owns nothing.
 
     Arranged the way it actually happens -- a run is cancelled while its deploy
-    is in flight, after the port and the deployment id have been recorded but
+    is in flight, after the deployment row and its port have been recorded but
     before the run reached DEPLOYED.
+
+    Ported from the standalone port allocator to DeployService, which now holds
+    the port on the deployment row. The properties are the same four: the
+    cancelled run's deployment is reported, its port is held, and neither is
+    true of the live one.
     """
-    from app.deploy.base import DeploymentTarget
     from app.domain.entities import Trigger
-    from app.domain.ids import uuid7
 
     live = await container.runs.create("stays up")
     await drain(worker, container)
@@ -281,32 +285,42 @@ async def test_a_cancelled_run_leaves_its_deployment_reportable(
     await stage_bundle(container, doomed.id)
     await container.runs.decide(doomed.id, Gate.DEPLOY, approved=True, decided_by="yash")
 
-    # The deploy job gets as far as recording its resources, then the run is
-    # cancelled before the job finishes.
-    allocation = await container.ports.allocate(doomed.id, host="127.0.0.1")
-    deployment_id = uuid7()
-    await container.deployer.deploy(
-        DeploymentTarget(
-            run_id=doomed.id,
-            deployment_id=deployment_id,
-            host="127.0.0.1",
-            project_name=f"slipway-{deployment_id}",
-            port=allocation.port,
-        ),
-        "memory://artifact",
-        timeout_seconds=5.0,
+    # The deploy gets as far as recording its resources and starting, then the
+    # run is cancelled before the job finishes.
+    doomed_deploy = await container.deploys.deploy(
+        doomed.id, context_path="", artifact_uri="memory://artifact"
     )
+    assert isinstance(doomed_deploy, Deployment), getattr(doomed_deploy, "detail", "")
     await container.runs.advance(
         doomed.id, Trigger.CANCELLED, actor="yash", detail="client pulled it"
     )
 
+    # Both runs hold a port at this point; one is entitled to and one is not.
+    async with container.uow() as uow:
+        holders = {d.run_id for d in
+                   await uow.deployments.list_holding_ports(host="127.0.0.1")}
+    assert doomed.id in holders, "the cancelled run's deployment still holds its port"
+    assert live.id in holders, "the live run's deployment still holds its port"
+
     report = await container.reconciler.inspect()
     reported = {(d.kind, d.run_id) for d in report.all}
 
-    assert ("port", doomed.id) in reported
     assert ("deployment", doomed.id) in reported
-    assert ("port", live.id) not in reported, "the live deployment must be left alone"
-    assert ("deployment", live.id) not in reported
+    assert ("deployment", live.id) not in reported, "the live deployment must be left alone"
+
+    # The repair is asymmetric: it frees the cancelled run's port and leaves the
+    # live one exactly as it was.
+    await container.reconciler.apply(report)
+
+    doomed_record = await container.deploys.get(doomed_deploy.deployment_id)
+    assert doomed_record is not None
+    assert doomed_record.destroyed_at is not None, "the cancelled run's port must be released"
+
+    async with container.uow() as uow:
+        still_holding = {d.run_id for d in
+                         await uow.deployments.list_holding_ports(host="127.0.0.1")}
+    assert doomed.id not in still_holding
+    assert live.id in still_holding, "apply() released a port that is still in use"
 
 
 async def test_a_deploy_with_no_bundle_fails_by_name(
@@ -353,9 +367,14 @@ async def test_a_refused_deploy_allocates_nothing(
     await drain(worker, container)
 
     async with container.uow() as uow:
-        allocations = await uow.ports.list_active(host="127.0.0.1")
+        holders = await uow.deployments.list_holding_ports(host="127.0.0.1")
+        for_this_run = await uow.deployments.list_for_run(run.id)
 
-    assert allocations == []
+    # Asserting on `deployments`, not the retired port_allocations table. The
+    # old assertion read a table nothing wrote any more, so it passed however
+    # much a refused deploy allocated -- verified by mutation.
+    assert holders == [], f"a refused deploy is holding ports: {holders}"
+    assert for_this_run == [], "a refused deploy created a deployment record"
     assert await container.deployer.list_live() == []
 
 

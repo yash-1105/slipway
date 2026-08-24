@@ -22,7 +22,6 @@ from app.domain.entities import (
     Gate,
     Job,
     JobStatus,
-    PortAllocation,
     Run,
     RunState,
 )
@@ -93,15 +92,6 @@ class ArtifactRepository(Protocol):
     async def list_for_run(self, run_id: UUID) -> list[ArtifactRef]: ...
 
 
-class PortAllocationRepository(Protocol):
-    async def allocate(self, *, run_id: UUID, host: str, port: int) -> PortAllocation | None:
-        """Claim one port. Returns None if the unique constraint says it is taken."""
-
-    async def release(self, allocation_id: UUID) -> None: ...
-
-    async def list_active(self, *, host: str) -> list[PortAllocation]: ...
-
-
 class CostRepository(Protocol):
     async def record(self, entry: CostEntry) -> CostEntry: ...
 
@@ -169,9 +159,6 @@ class UnitOfWork(Protocol):
 
     @property
     def artifacts(self) -> ArtifactRepository: ...
-
-    @property
-    def ports(self) -> PortAllocationRepository: ...
 
     @property
     def costs(self) -> CostRepository: ...

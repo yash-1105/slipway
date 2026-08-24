@@ -45,7 +45,6 @@ class ReconcileReport:
     #: A record still holding its port whose container is gone -- removed by
     #: hand, or by a `docker system prune`. The port is being held for nothing.
     vanished_deployments: list[Discrepancy] = field(default_factory=list)
-    stale_port_allocations: list[Discrepancy] = field(default_factory=list)
 
     @property
     def all(self) -> list[Discrepancy]:
@@ -53,7 +52,6 @@ class ReconcileReport:
             *self.orphan_sandboxes,
             *self.orphan_deployments,
             *self.vanished_deployments,
-            *self.stale_port_allocations,
         ]
 
     @property
@@ -98,7 +96,6 @@ class Reconciler:
                     states=frozenset({RunState.DEPLOYED}), limit=1000
                 )
             }
-            allocations = await uow.ports.list_active(host=self._deploy_host)
 
         live_sandboxes = await self._sandbox.list_live()
         orphan_sandboxes = [
@@ -153,22 +150,10 @@ class Reconciler:
             if record.status is DeploymentStatus.LIVE and record.id not in seen_ids
         ]
 
-        stale_ports = [
-            Discrepancy(
-                kind="port",
-                subject=f"{allocation.host}:{allocation.port}",
-                detail="port is held by a run that failed, was cancelled, or is unknown",
-                run_id=allocation.run_id,
-            )
-            for allocation in allocations
-            if allocation.run_id not in entitled_runs
-        ]
-
         return ReconcileReport(
             orphan_sandboxes=orphan_sandboxes,
             orphan_deployments=orphan_deployments,
             vanished_deployments=vanished_deployments,
-            stale_port_allocations=stale_ports,
         )
 
     async def apply(self, report: ReconcileReport) -> ReconcileReport:
@@ -199,29 +184,24 @@ class Reconciler:
             )
             log.info("reconcile.deployment_torn_down", project=discrepancy.subject)
 
-        # A record whose container is gone: settle it and give the port back.
-        # Nothing is destroyed here -- the container already is.
-        if report.vanished_deployments:
+        # Settle the record for anything torn down or already gone, in one pass.
+        # `release_port=True` is what gives the port back, and it is the same
+        # statement that records how the deployment ended -- so a reconciled
+        # deployment cannot end up with an outcome and a port it still holds.
+        settling = [*report.orphan_deployments, *report.vanished_deployments]
+        if settling:
             async with self._uow() as uow:
-                for discrepancy in report.vanished_deployments:
+                for discrepancy in settling:
                     if discrepancy.deployment_id is None:
                         continue
-                    await uow.deployments.settle(
+                    settled = await uow.deployments.settle(
                         discrepancy.deployment_id,
                         status=DeploymentStatus.TORN_DOWN,
-                        log="reconciled: the container no longer exists",
+                        log=f"reconciled: {discrepancy.detail}",
                         release_port=True,
                     )
-                    log.info("reconcile.record_settled", subject=discrepancy.subject)
-                await uow.commit()
-
-        if report.stale_port_allocations:
-            async with self._uow() as uow:
-                for allocation in await uow.ports.list_active(host=self._deploy_host):
-                    subject = f"{allocation.host}:{allocation.port}"
-                    if any(d.subject == subject for d in report.stale_port_allocations):
-                        await uow.ports.release(allocation.id)
-                        log.info("reconcile.port_released", port=subject)
+                    if settled is not None:
+                        log.info("reconcile.record_settled", subject=discrepancy.subject)
                 await uow.commit()
 
         return await self.inspect()

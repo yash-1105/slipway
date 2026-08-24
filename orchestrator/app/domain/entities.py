@@ -225,18 +225,3 @@ class DeploymentRecord:
     def holds_its_port(self) -> bool:
         return self.destroyed_at is None
 
-
-@dataclass(frozen=True, slots=True)
-class PortAllocation:
-    """A port on the deploy host, owned by exactly one run.
-
-    Allocated by inserting a row and letting the unique constraint arbitrate,
-    never by scanning for a port that looks free.
-    """
-
-    id: UUID
-    run_id: UUID
-    host: str
-    port: int
-    allocated_at: datetime
-    released_at: datetime | None = None
