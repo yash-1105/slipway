@@ -73,7 +73,7 @@ db-stop:  ## Stop the local Postgres, keeping its data
 # ---------------------------------------------------------------------------
 
 .PHONY: check
-check: lint types imports env-access test-unit  ## Everything that must pass before a commit
+check: lint types imports env-access runbook test-unit  ## Everything that must pass before a commit
 
 .PHONY: lint
 lint:  ## ruff
@@ -95,6 +95,10 @@ imports:  ## import-linter: the layering and the five seams (ADRs 0001, 0002)
 .PHONY: env-access
 env-access:  ## Fail if anything outside app/config.py reads the environment
 	$(RUN) python scripts/check_env_access.py
+
+.PHONY: runbook
+runbook:  ## Fail if RUNBOOK.md prescribes a CLI command that does not exist
+	$(IN_ORCH) python ../scripts/check_runbook_commands.py
 
 .PHONY: test-unit
 test-unit:  ## Unit tests: pure logic, no IO

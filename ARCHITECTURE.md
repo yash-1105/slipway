@@ -49,11 +49,19 @@ failed container build returns a `BuildResult` carrying the log.
   id, so nothing above the seam changes.
 
 ### runtimes — executing an agent graph
-- **V1:** LangGraph executed in the worker process, checkpointed to Postgres.
+- **V1:** LangGraph executed in the worker process, with **no checkpointer**.
+  A graph that dies mid-node leaves nothing behind; the job's lease expires and
+  another worker runs the whole graph again from its inputs. That is the only
+  recovery mechanism there is, and it is why every job body must be idempotent.
 - **V2:** a durable execution engine so a graph survives a worker restart
-  mid-node rather than replaying the job from its last committed step.
-- **At migration:** jobs are already idempotent and leased, so the replay
-  semantics V2 removes are the ones V1 relies on. The Protocol does not change.
+  mid-node rather than replaying it.
+- **At migration:** jobs are already idempotent and leased, so the replay V2
+  removes is the thing V1 depends on rather than a workaround for it. The
+  Protocol does not change.
+
+  The cost of having no checkpointer is paid in tokens: a graph that fails on
+  its last node re-runs every model call before it. Adding one is a dependency
+  and an ADR, not a quiet change.
 
 ### sandbox — running agent tool calls
 - **V1:** a Docker container per run from `sandbox-image/`, no network except

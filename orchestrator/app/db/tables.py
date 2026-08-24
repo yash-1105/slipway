@@ -4,12 +4,15 @@ These mirror orchestrator/migrations/*.sql. The SQL is the source of truth --
 the schema is created by the numbered migrations, never by metadata.create_all
 -- and these definitions exist so queries are typed and composable.
 
-tests/integration/test_schema_matches_tables.py compares the two.
+tests/integration/test_schema_matches_tables.py compares the two, column by
+column, against a real database: names, types, nullability, and that no
+primary key has quietly become an integer.
 """
 
 from __future__ import annotations
 
 from sqlalchemy import (
+    CHAR,
     BigInteger,
     Boolean,
     Column,
@@ -81,7 +84,9 @@ artifacts = Table(
     Column("run_id", UUID(as_uuid=True), nullable=False),
     Column("kind", Text, nullable=False),
     Column("uri", Text, nullable=False),
-    Column("sha256", Text, nullable=False),
+    # char(64), matching migration 0003. A sha256 hex digest is exactly this
+    # wide and the migration constrains it to `^[0-9a-f]{64}$`.
+    Column("sha256", CHAR(64), nullable=False),
     Column("size_bytes", BigInteger, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
@@ -126,6 +131,6 @@ schema_migrations = Table(
     "schema_migrations",
     metadata,
     Column("version", Text, primary_key=True),
-    Column("sha256", Text, nullable=False),
+    Column("sha256", CHAR(64), nullable=False),
     Column("applied_at", DateTime(timezone=True), nullable=False),
 )

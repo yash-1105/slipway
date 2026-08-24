@@ -12,6 +12,10 @@ the commit that did it. Do not delete entries.
 
 ## 2026-08-24 — "Each is a GitHub template repository" is not achievable as written
 
+**Resolved.** ADR 0008 settles it: blueprints stay directories, instantiated by
+copying the tracked subtree and running `git init`. `slipway-blueprints/README.md`
+now describes that flow.
+
 `slipway-blueprints/README.md` says: "One directory per archetype. Each is a
 **GitHub template repository**." A directory inside a repository cannot be a
 GitHub template repository — the template flag is a property of a repository,
@@ -30,6 +34,12 @@ scaffolds a run and how a generated repo records which blueprint version it
 came from, so it is a decision rather than a typo.
 
 ## 2026-08-24 — Documents describing behaviour that does not exist
+
+**Resolved**, all three. Item 1 by writing the test rather than deleting the
+claim — it found real drift on its first run. Items 2 and 3 by correcting the
+documents, since the code they described would have been new features.
+`scripts/check_runbook_commands.py` now fails `make check` if the runbook
+prescribes a command the CLI does not have.
 
 Found while producing the module inventory. All three predate the
 "no document may describe behaviour that is not covered by a test" rule, and
@@ -55,6 +65,11 @@ describes seventeen. Confirmed by comparing `@app.command` decorators in
 during an incident and the command is not there.
 
 ## 2026-08-24 — The `deployments` table has no writes
+
+**Still open.** The related problem — the deploy job handing a build log to the
+deployer as if it were a bundle — was fixed separately: the stage now refuses
+when no artifact of kind `bundle` exists. Nothing still writes a `deployments`
+row, so the crash-mid-deploy case below is unchanged.
 
 Migration `0003_deploy.sql` comments that status `'recording'` is written
 *before* the compose project is created, so a crash mid-deploy leaves a row the
@@ -88,11 +103,17 @@ first agent that needs a tool call has an untested sandbox underneath it.
 
 ## 2026-08-24 — `compose_ssh.rollback()` is a stub citing a module that does not exist
 
+**Partly addressed.** The stub is unchanged. `RUNBOOK.md` no longer claims
+rollback works; it says plainly that it is not implemented and gives the manual
+teardown instead.
+
 It returns `DeployFailure("unreachable", ...)` whose message points at
 `services.deploys.rollback`. There is no `app/services/deploys.py`. The
 `RUNBOOK.md` rollback procedure depends on both.
 
 ## 2026-08-24 — `reconcile.apply()` is untested
+
+**Still open.** `RUNBOOK.md` now warns about it at the point of use.
 
 `inspect()` has tests. `apply()` — the half that stops containers, tears down
 deployments and releases ports — has 0% coverage, measured with `pytest --cov`.

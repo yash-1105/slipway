@@ -2,13 +2,50 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from uuid import UUID
+
 import pytest
 
+from app.artifacts.base import StoredArtifact
 from app.container import Container
-from app.domain.entities import Gate, RunState
-from app.worker import Worker
+from app.domain.entities import ArtifactRef, Gate, RunState
+from app.domain.ids import uuid7
+from app.worker import DEPLOYABLE_ARTIFACT_KIND, Worker
 
 pytestmark = pytest.mark.acceptance
+
+
+async def stage_bundle(container: Container, run_id: UUID) -> str:
+    """Put a deployable bundle where the deploy stage will look for it.
+
+    Nothing in the pipeline produces one yet: the build stage emits an agent's
+    prose about a build, not a build. A test that wants to exercise deployment
+    therefore has to stage the artifact itself, and say so.
+
+    The previous version of these tests did not, and passed anyway, because the
+    deploy job fell back to the build log and the fake deployer accepted any
+    URI. They asserted a success that could not happen against a real deployer.
+    """
+    stored = await container.artifacts.put(
+        run_id, DEPLOYABLE_ARTIFACT_KIND, b"a tarball would go here", timeout_seconds=5.0
+    )
+    assert isinstance(stored, StoredArtifact)
+
+    async with container.uow() as uow:
+        await uow.artifacts.record(
+            ArtifactRef(
+                id=uuid7(),
+                run_id=run_id,
+                kind=DEPLOYABLE_ARTIFACT_KIND,
+                uri=stored.uri,
+                sha256=stored.sha256,
+                size_bytes=stored.size_bytes,
+                created_at=datetime.now(UTC),
+            )
+        )
+        await uow.commit()
+    return stored.uri
 
 
 async def drain(worker: Worker, container: Container, *, limit: int = 20) -> int:
@@ -49,6 +86,7 @@ async def test_the_whole_loop_from_brief_to_deployed(
 
     assert await drain(worker, container) == 0, "the deploy gate must hold too"
 
+    await stage_bundle(container, run.id)
     run = await container.runs.decide(run.id, Gate.DEPLOY, approved=True, decided_by="yash")
     assert run.state is RunState.DEPLOYING
 
@@ -153,6 +191,7 @@ async def test_a_deploy_allocates_a_port_and_a_url(container: Container, worker:
     await drain(worker, container)
     await container.runs.decide(run.id, Gate.SPEC, approved=True, decided_by="yash")
     await drain(worker, container)
+    await stage_bundle(container, run.id)
     await container.runs.decide(run.id, Gate.DEPLOY, approved=True, decided_by="yash")
     await drain(worker, container)
 
@@ -179,6 +218,7 @@ async def test_two_runs_never_share_a_port(container: Container, worker: Worker)
         await drain(worker, container)
         await container.runs.decide(run.id, Gate.SPEC, approved=True, decided_by="yash")
         await drain(worker, container)
+        await stage_bundle(container, run.id)
         await container.runs.decide(run.id, Gate.DEPLOY, approved=True, decided_by="yash")
         await drain(worker, container)
 
@@ -196,6 +236,7 @@ async def test_the_reconciler_is_clean_after_a_completed_run(
     await drain(worker, container)
     await container.runs.decide(run.id, Gate.SPEC, approved=True, decided_by="yash")
     await drain(worker, container)
+    await stage_bundle(container, run.id)
     await container.runs.decide(run.id, Gate.DEPLOY, approved=True, decided_by="yash")
     await drain(worker, container)
 
@@ -224,6 +265,7 @@ async def test_a_cancelled_run_leaves_its_deployment_reportable(
     await drain(worker, container)
     await container.runs.decide(live.id, Gate.SPEC, approved=True, decided_by="yash")
     await drain(worker, container)
+    await stage_bundle(container, live.id)
     await container.runs.decide(live.id, Gate.DEPLOY, approved=True, decided_by="yash")
     await drain(worker, container)
     assert (await container.runs.get(live.id)).state is RunState.DEPLOYED
@@ -232,6 +274,7 @@ async def test_a_cancelled_run_leaves_its_deployment_reportable(
     await drain(worker, container)
     await container.runs.decide(doomed.id, Gate.SPEC, approved=True, decided_by="yash")
     await drain(worker, container)
+    await stage_bundle(container, doomed.id)
     await container.runs.decide(doomed.id, Gate.DEPLOY, approved=True, decided_by="yash")
 
     # The deploy job gets as far as recording its resources, then the run is
@@ -260,3 +303,80 @@ async def test_a_cancelled_run_leaves_its_deployment_reportable(
     assert ("deployment", doomed.id) in reported
     assert ("port", live.id) not in reported, "the live deployment must be left alone"
     assert ("deployment", live.id) not in reported
+
+
+async def test_a_deploy_with_no_bundle_fails_by_name(
+    container: Container, worker: Worker
+) -> None:
+    """The deploy stage refuses rather than deploying whatever is lying around.
+
+    This is what every run does today, because no stage produces a bundle. The
+    previous behaviour was to fall back to the build log -- an agent's prose
+    about a build -- and hand it to the deployer, which with a real deployer
+    means a URL that serves nothing and a run marked DEPLOYED.
+    """
+    run = await container.runs.create("a brief")
+    await drain(worker, container)
+    await container.runs.decide(run.id, Gate.SPEC, approved=True, decided_by="yash")
+    await drain(worker, container)
+
+    # Note: no stage_bundle() call. This is the honest state of the pipeline.
+    run = await container.runs.decide(run.id, Gate.DEPLOY, approved=True, decided_by="yash")
+    assert run.state is RunState.DEPLOYING
+
+    await drain(worker, container)
+
+    run = await container.runs.get(run.id)
+    assert run.state is RunState.FAILED
+    assert run.failure_reason is not None
+    assert "no deployable artifact" in run.failure_reason
+    assert DEPLOYABLE_ARTIFACT_KIND in run.failure_reason
+
+
+async def test_a_refused_deploy_allocates_nothing(
+    container: Container, worker: Worker
+) -> None:
+    """Refusing early means no port is taken and no deployment is created.
+
+    The check runs before the allocator, so a run that cannot deploy does not
+    consume a port from a bounded range on its way to failing.
+    """
+    run = await container.runs.create("a brief")
+    await drain(worker, container)
+    await container.runs.decide(run.id, Gate.SPEC, approved=True, decided_by="yash")
+    await drain(worker, container)
+    await container.runs.decide(run.id, Gate.DEPLOY, approved=True, decided_by="yash")
+    await drain(worker, container)
+
+    async with container.uow() as uow:
+        allocations = await uow.ports.list_active(host="127.0.0.1")
+
+    assert allocations == []
+    assert await container.deployer.list_live() == []
+
+
+async def test_the_refusal_is_not_retried(container: Container, worker: Worker) -> None:
+    """A missing artifact cannot be retried into existence.
+
+    Burning the attempt cap on it delays the diagnosis and buries the real
+    reason under 'attempts exhausted'.
+    """
+    run = await container.runs.create("a brief")
+    await drain(worker, container)
+    await container.runs.decide(run.id, Gate.SPEC, approved=True, decided_by="yash")
+    await drain(worker, container)
+    await container.runs.decide(run.id, Gate.DEPLOY, approved=True, decided_by="yash")
+    await drain(worker, container)
+
+    async with container.uow() as uow:
+        events = await uow.events.list_for_run(run.id)
+
+    abandoned = [e for e in events if e.kind == "job.abandoned"]
+    assert len(abandoned) == 1
+    assert abandoned[0].payload["kind"] == "deploy"
+    assert abandoned[0].payload["attempts"] == 1, "abandoned on the first attempt"
+
+    # And the job really is terminal, not waiting to be picked up again.
+    assert await container.jobs.claim(frozenset({"deploy"})) is None
+    async with container.uow() as uow:
+        assert await uow.jobs.list_expired(now=datetime.now(UTC)) == []

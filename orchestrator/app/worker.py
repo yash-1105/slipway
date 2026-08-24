@@ -30,6 +30,12 @@ log = structlog.get_logger(__name__)
 #: Which graph a job kind runs. `deploy` is not a graph; it is handled below.
 GRAPH_FOR_KIND = {"specify": "specify", "build": "build", "test": "test"}
 
+#: The only artifact kind the deploy stage will deploy. Nothing produces one
+#: yet -- the build stage emits `build_log`, which is an agent's prose about a
+#: build rather than a build -- so every deploy currently fails here, loudly and
+#: by name. That is the intended behaviour until a builder agent exists.
+DEPLOYABLE_ARTIFACT_KIND = "bundle"
+
 
 class Worker:
     def __init__(self, container: Container) -> None:
@@ -159,6 +165,25 @@ class Worker:
         settings = self._settings
         host = settings.deploy_public_host
 
+        # Before anything is allocated. Deploying whatever artifact happens to
+        # exist produced a URL that served nothing: the previous version fell
+        # back to the `build_log`, which is an agent's prose about a build, not
+        # a build.
+        artifact_uri = await self._deployable_artifact_uri(job.run_id)
+        if artifact_uri is None:
+            detail = (
+                f"no deployable artifact for run {job.run_id}: nothing has "
+                f"produced an artifact of kind {DEPLOYABLE_ARTIFACT_KIND!r}. "
+                "The build stage currently emits a log, not a bundle, so there "
+                "is nothing to deploy. Refusing rather than deploying a "
+                "placeholder."
+            )
+            log.error("deploy.no_artifact", run_id=str(job.run_id), kind=DEPLOYABLE_ARTIFACT_KIND)
+            # Terminal: a retry cannot conjure an artifact no stage produces.
+            await self._c.jobs.fail(job, detail, terminal=True)
+            await self._advance(self._c.runs, job.run_id, Trigger.DEPLOY_FAILED, detail=detail)
+            return
+
         allocation = await self._c.ports.allocate(job.run_id, host=host)
         deployment_id = uuid7()
 
@@ -172,7 +197,6 @@ class Worker:
             port=allocation.port,
         )
 
-        artifact_uri = await self._latest_artifact_uri(job.run_id)
         result = await self._c.deployer.deploy(
             target, artifact_uri, timeout_seconds=settings.deploy_timeout_seconds
         )
@@ -192,13 +216,18 @@ class Worker:
         await self._c.jobs.succeed(job)
         await self._advance(self._c.runs, job.run_id, Trigger.DEPLOY_SUCCEEDED, detail=result.url)
 
-    async def _latest_artifact_uri(self, run_id: UUID) -> str:
+    async def _deployable_artifact_uri(self, run_id: UUID) -> str | None:
+        """The newest deployable bundle for a run, or None if there is not one.
+
+        None is the answer today for every run: no stage produces a bundle yet.
+        The caller fails the run rather than substituting something else.
+        """
         async with self._c.uow() as uow:
             artifacts = await uow.artifacts.list_for_run(run_id)
         for artifact in reversed(artifacts):
-            if artifact.kind == "build_log":
+            if artifact.kind == DEPLOYABLE_ARTIFACT_KIND:
                 return artifact.uri
-        return ""
+        return None
 
     async def _reconcile(self, job: Job) -> None:
         report = await self._c.reconciler.inspect()

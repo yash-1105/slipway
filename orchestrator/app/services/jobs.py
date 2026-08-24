@@ -72,14 +72,19 @@ class JobService:
             )
             await uow.commit()
 
-    async def fail(self, job: Job, error: str) -> bool:
+    async def fail(self, job: Job, error: str, *, terminal: bool = False) -> bool:
         """Record a failed attempt.
 
         Returns True if the job will be retried, False if it is exhausted. The
         caller uses that to decide whether to fail the run, so an exhausted job
         does not leave a run waiting forever.
+
+        `terminal` abandons the job immediately, whatever the attempt count.
+        Use it when a retry cannot possibly succeed -- a missing input, an
+        unknown job kind -- because retrying those four more times only delays
+        the diagnosis and hides the real reason behind an attempt cap.
         """
-        exhausted = job.attempts >= self._max_attempts
+        exhausted = terminal or job.attempts >= self._max_attempts
         status = JobStatus.ABANDONED if exhausted else JobStatus.PENDING
 
         async with self._uow() as uow:
