@@ -254,7 +254,10 @@ class Workspace:
             for p in self.root.glob(a["pattern"])
             if ".git" not in p.parts
         )
-        return "\n".join(matches) if matches else "(no matches)", not matches
+        # An empty glob is never a missing reference. Globbing to find out
+        # whether something exists is what the tool is for, and counting the
+        # answer "no" as a hallucination penalises the model for checking.
+        return "\n".join(matches) if matches else "(no matches)", False
 
     def _grep(self, a: dict[str, Any]) -> tuple[str, bool]:
         try:

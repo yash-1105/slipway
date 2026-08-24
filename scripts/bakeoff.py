@@ -123,6 +123,7 @@ class TaskResult:
     steps_passed: int
     step_results: list[bool]
     turns: int
+    empty_responses: int
     seconds: float
     prompt_tokens: int
     completion_tokens: int
@@ -134,7 +135,8 @@ class TaskResult:
     missing_reference_detail: list[str]
     outside_repo_attempts: int
     refused_bash: int
-    out_of_scope_files: list[str]
+    out_of_scope_edits: list[str]
+    new_files_outside_scope: list[str]
     stopped: str
     #: (call index, malformed, missing_reference) for degradation analysis.
     timeline: list[tuple[int, bool, bool]] = field(default_factory=list)
@@ -155,16 +157,28 @@ def materialise(task: Task, root: Path) -> None:
         subprocess.run(command, shell=True, cwd=root, capture_output=True)
 
 
-def modified_files(root: Path) -> list[str]:
+def out_of_scope(root: Path, task: Task) -> tuple[list[str], list[str]]:
+    """(existing files edited outside scope, new files added outside scope).
+
+    Two different things, and only the first is a problem. A model that adds
+    tests/test_helpers.py after writing helpers.py has done something good;
+    counting that as scribbling outside its task would punish the behaviour we
+    want. Editing a file the task never mentioned is the one worth reporting.
+    """
     done = subprocess.run(
         "git status --porcelain", shell=True, cwd=root, capture_output=True, text=True
     )
-    return sorted(line[3:].strip() for line in done.stdout.splitlines() if line.strip())
-
-
-def out_of_scope(root: Path, task: Task) -> list[str]:
     allowed = set(task.in_scope)
-    return [f for f in modified_files(root) if f not in allowed]
+    edited: list[str] = []
+    added: list[str] = []
+    for line in done.stdout.splitlines():
+        if not line.strip():
+            continue
+        code, name = line[:2], line[3:].strip()
+        if name in allowed:
+            continue
+        (added if code.strip() == "??" else edited).append(name)
+    return sorted(edited), sorted(added)
 
 
 def run_task(
@@ -179,6 +193,8 @@ def run_task(
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM}]
 
     turns = 0
+    empty_responses = 0
+    consecutive_empty = 0
     prompt_tokens = completion_tokens = 0
     usd = Decimal(0)
     started = time.monotonic()
@@ -225,7 +241,29 @@ def run_task(
             })
 
             if not calls:
-                break
+                if (choice.content or "").strip():
+                    break  # said its piece and stopped: the task is finished
+
+                # An empty message with no tool call is not "done", it is a
+                # stall. Treating the two as the same thing scored a model as
+                # having decided the work was unnecessary when it had in fact
+                # returned nothing at all. Nudge once, as any real loop would,
+                # and record it either way.
+                empty_responses += 1
+                if consecutive_empty >= 1:
+                    stopped = "stalled: two empty responses in a row"
+                    break
+                consecutive_empty += 1
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You returned an empty response with no tool call. If the task "
+                        "is complete, say so. Otherwise continue working on it."
+                    ),
+                })
+                continue
+
+            consecutive_empty = 0
 
             for call in calls:
                 stats.total_calls += 1
@@ -255,12 +293,18 @@ def run_task(
             step_results.extend([False] * (len(task.steps) - len(step_results)))
             break
 
+    oos_edits, oos_added = out_of_scope(root, task)
+
+    transcript = root.parent / f"{task.id}-transcript.json"
+    transcript.write_text(json.dumps(messages, indent=2, default=str))
+
     return TaskResult(
         task=task.id,
         steps_total=len(task.steps),
         steps_passed=sum(step_results),
         step_results=step_results,
         turns=turns,
+        empty_responses=empty_responses,
         seconds=round(time.monotonic() - started, 1),
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -272,7 +316,8 @@ def run_task(
         missing_reference_detail=stats.missing_reference_detail[:12],
         outside_repo_attempts=stats.outside_repo_attempts,
         refused_bash=stats.refused_bash,
-        out_of_scope_files=out_of_scope(root, task),
+        out_of_scope_edits=oos_edits,
+        new_files_outside_scope=oos_added,
         stopped=stopped,
         timeline=stats.timeline,
     )
@@ -301,7 +346,14 @@ def main() -> int:
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--only", default="", help="comma-separated model ids")
     parser.add_argument("--tasks", default="", help="comma-separated task ids")
+    parser.add_argument("--out", default="", help="write results to a different file")
+    parser.add_argument("--resume", action="store_true",
+                        help="keep results already in results.json and run only what is missing")
     args = parser.parse_args()
+
+    global RESULTS
+    if args.out:
+        RESULTS = ROOT / 'scripts' / 'bakeoff_kit' / args.out
 
     api_key = keychain_api_key()
     models, prices = candidates_and_prices(api_key)
@@ -321,6 +373,18 @@ def main() -> int:
 
     budget = Decimal(str(args.budget_usd))
     spent = Decimal(0)
+
+    # Resume rather than redo. A run that was interrupted has already paid for
+    # what it finished, and re-running it would spend that money again for the
+    # same answer -- and, because these models are not deterministic even at
+    # temperature 0, a slightly different one.
+    previous: dict[str, Any] = {}
+    if args.resume and RESULTS.is_file():
+        previous = json.loads(RESULTS.read_text())
+        spent = Decimal(str(previous.get("spent_usd", 0)))
+        print(f"resuming: ${spent} already spent, "
+              f"{sum(len(v) for v in previous.get('runs', {}).values())} task runs kept")
+
     results: dict[str, Any] = {
         "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "base_url": catalogue["source_base_url"],
@@ -328,7 +392,7 @@ def main() -> int:
         "usd_to_inr": 95.5,
         "candidates": models,
         "prices": {m: [str(p[0]), str(p[1])] for m, p in prices.items()},
-        "runs": {},
+        "runs": previous.get("runs", {}),
         "not_reached": [],
     }
 
@@ -344,9 +408,13 @@ def main() -> int:
         if spent >= budget:
             print(f"\nbudget reached (${spent:.4f}); stopping before {model_id}", flush=True)
             break
+        already = {r["task"] for r in results["runs"].get(model_id, [])}
+        todo = [t for t in tasks if t.id not in already]
+        if not todo:
+            continue
         print(f"\n=== {model_id} ===", flush=True)
-        results["runs"][model_id] = []
-        for task in tasks:
+        results["runs"].setdefault(model_id, [])
+        for task in todo:
             remaining = budget - spent
             if remaining <= Decimal("0.20"):
                 print(f"  {task.id}: skipped, ${remaining:.4f} left", flush=True)
@@ -358,10 +426,11 @@ def main() -> int:
             rate = (result.malformed / result.total_calls * 100) if result.total_calls else 0.0
             print(
                 f"  {task.id}: {result.steps_passed}/{result.steps_total} steps  "
-                f"turns={result.turns:<3} calls={result.total_calls:<3} "
+                f"turns={result.turns:<3} calls={result.total_calls:<3} empty={result.empty_responses} "
                 f"malformed={result.malformed} ({rate:.1f}%)  "
                 f"missing_ref={result.missing_reference} "
-                f"oos={len(result.out_of_scope_files)} "
+                f"oos_edit={len(result.out_of_scope_edits)} "
+                f"new={len(result.new_files_outside_scope)} "
                 f"{result.seconds}s  ${result.usd:.4f}  [{result.stopped}]",
                 flush=True,
             )
