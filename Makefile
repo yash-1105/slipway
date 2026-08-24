@@ -10,6 +10,10 @@ SHELL := /usr/bin/env bash
 ORCH := orchestrator
 UV := uv --project $(ORCH)
 RUN := $(UV) run
+# ruff, mypy and pytest all resolve their configured paths relative to the
+# working directory, so they run from inside the orchestrator package rather
+# than from the repository root.
+IN_ORCH := cd $(ORCH) && uv run
 COMPOSE := docker compose --file deploy/compose.yaml
 
 # Local development defaults. Override any of these in your own environment;
@@ -51,8 +55,8 @@ dev: db migrate  ## Run Postgres, the API, the worker and the frontend
 	@echo "api      http://$${SLIPWAY_API_HOST:-127.0.0.1}:$${SLIPWAY_API_PORT:-8000}"
 	@echo "frontend http://127.0.0.1:5173"
 	@trap 'kill 0' EXIT INT TERM; \
-	$(RUN) python -m app.main & \
-	$(RUN) python -m app.worker & \
+	(cd $(ORCH) && uv run python -m app.main) & \
+	(cd $(ORCH) && uv run python -m app.worker) & \
 	(cd frontend && npm run dev) & \
 	wait
 
@@ -73,20 +77,20 @@ check: lint types imports env-access test-unit  ## Everything that must pass bef
 
 .PHONY: lint
 lint:  ## ruff
-	$(RUN) ruff check $(ORCH)
+	$(IN_ORCH) ruff check .
 
 .PHONY: format
 format:  ## ruff --fix
-	$(RUN) ruff check --fix $(ORCH)
-	$(RUN) ruff format $(ORCH)
+	$(IN_ORCH) ruff check --fix .
+	$(IN_ORCH) ruff format .
 
 .PHONY: types
 types:  ## mypy strict
-	$(RUN) mypy
+	$(IN_ORCH) mypy
 
 .PHONY: imports
 imports:  ## import-linter: the layering and the five seams (ADRs 0001, 0002)
-	cd $(ORCH) && uv run lint-imports
+	$(IN_ORCH) lint-imports
 
 .PHONY: env-access
 env-access:  ## Fail if anything outside app/config.py reads the environment
@@ -94,15 +98,15 @@ env-access:  ## Fail if anything outside app/config.py reads the environment
 
 .PHONY: test-unit
 test-unit:  ## Unit tests: pure logic, no IO
-	$(RUN) pytest $(ORCH)/tests/unit -q
+	$(IN_ORCH) pytest tests/unit -q
 
 .PHONY: test-integration
 test-integration: db migrate  ## Integration tests: real Postgres, real Docker
-	$(RUN) pytest $(ORCH)/tests/integration -q
+	$(IN_ORCH) pytest tests/integration -q
 
 .PHONY: test-acceptance
 test-acceptance: db migrate  ## Acceptance tests: the full loop
-	$(RUN) pytest $(ORCH)/tests/acceptance -q
+	$(IN_ORCH) pytest tests/acceptance -q
 
 .PHONY: test
 test: test-unit test-integration test-acceptance  ## Every test
@@ -113,11 +117,11 @@ test: test-unit test-integration test-acceptance  ## Every test
 
 .PHONY: migrate
 migrate:  ## Apply pending forward-only migrations
-	$(RUN) python -m app.cli.main migrate
+	$(IN_ORCH) python -m app.cli.main migrate
 
 .PHONY: seed
 seed:  ## Insert local development fixtures (never any secret)
-	$(RUN) python scripts/seed.py
+	$(IN_ORCH) python ../scripts/seed.py
 
 .PHONY: reset
 reset:  ## Drop and recreate the local database, then migrate
@@ -131,11 +135,11 @@ reset:  ## Drop and recreate the local database, then migrate
 
 .PHONY: models-sync
 models-sync:  ## Regenerate config/models.yaml from the live /models endpoint
-	$(RUN) python scripts/sync_models.py
+	$(IN_ORCH) python ../scripts/sync_models.py
 
 .PHONY: eval
 eval:  ## Run the eval cases in evals/cases
-	$(RUN) python scripts/run_evals.py evals/cases
+	$(IN_ORCH) python ../scripts/run_evals.py ../evals/cases
 
 # ---------------------------------------------------------------------------
 # deployment

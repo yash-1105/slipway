@@ -71,7 +71,9 @@ async def test_compare_and_set_rejects_a_stale_expectation(uow_factory: UowFacto
     assert lost is None
 
 
-async def test_enqueueing_the_same_idempotency_key_twice_yields_one_job(uow_factory: UowFactory) -> None:
+async def test_enqueueing_the_same_idempotency_key_twice_yields_one_job(
+    uow_factory: UowFactory,
+) -> None:
     run = await _a_run(uow_factory)
     first = _job(run, key="the-same-key")
     second = _job(run, key="the-same-key")
