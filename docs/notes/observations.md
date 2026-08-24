@@ -10,6 +10,34 @@ the commit that did it. Do not delete entries.
 
 ---
 
+## 2026-08-24 — Open question: should the planner move to deepseek-v4-flash?
+
+The tool-calling bake-off made `deepseek/deepseek-v4-flash` the best candidate
+on every axis it measured: no stalls, no malformed calls, the only model to pass
+T4's refactor step in both runs, fastest, and 8x cheaper than the planner
+primary. `zai-org/glm-5.2`, the planner primary, stalled reproducibly on T1 and
+did not recover from a nudge.
+
+On that evidence I recommended promoting it. **Declined, 2026-08-24**, and the
+reason is worth keeping:
+
+> The bake-off measured tool-loop discipline on coding tasks. The planner does
+> almost no tool use; its job is long-context reasoning over a brief. Promoting
+> on this evidence generalises from the wrong benchmark.
+
+That is right, and it is a mistake the bake-off's own framing invited: a number
+that is precise and available is not the same as a number that is relevant.
+ADR 0009 records the general form of it — tool discipline is not build quality —
+but this is the specific case where I nearly acted on it.
+
+**Revisit when:** P8 produces real specifications. Comparing planner candidates
+on specs they actually wrote is the right evidence, it costs nothing extra
+because P8 generates it anyway, and it measures the thing the role does.
+
+Until then `glm-5.2` stays planner primary, stall and all. The stall recovery
+path in `docs/notes/p8-p9-agent-loop.md` is what makes that tolerable.
+---
+
 ## 2026-08-24 — CLAUDE.md's Responses API claim is false
 
 **Resolved by the user**, 2026-08-24. CLAUDE.md now states the per-model

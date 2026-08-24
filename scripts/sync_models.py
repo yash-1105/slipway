@@ -50,8 +50,13 @@ INTENDED: dict[str, str] = {
     "planner": "GLM 5.2",
     "builder": "Kimi K2.7 Code",
     "evaluator": "DeepSeek V4 Flash",
-    "test_author": "GLM 4.7",
-    "doc_writer": "GLM 4.7",
+    # Swapped to DeepSeek V4 Flash after the tool-calling bake-off: it beat
+    # GLM 4.7 8/9 to 7/9, passed the refactor step twice where GLM 4.7 passed
+    # neither, and cost a quarter as much. GLM 4.7's failure mode -- inventing
+    # tests for behaviour the code never had -- is disqualifying for the role
+    # that authors tests. See docs/decisions/0009-tool-calling-substrate.md.
+    "test_author": "DeepSeek V4 Flash",
+    "doc_writer": "DeepSeek V4 Flash",
 }
 
 

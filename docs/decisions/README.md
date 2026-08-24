@@ -15,6 +15,8 @@ was not.
 | [0006](0006-scratch-org.md) | Generated repositories live in a scratch org | Accepted |
 | [0007](0007-prompts-and-evals-stay-in-slipway.md) | Prompts and evals stay in this repository | Accepted |
 | [0008](0008-blueprints-stay-directories.md) | Blueprints stay directories in one repository | Accepted |
+| [0009](0009-tool-calling-substrate.md) | The tool-calling substrate is sound; go on the agent layer | Accepted |
+| [0010](0010-difficulty-not-context.md) | Difficulty degrades quality; context length did not | Accepted |
 
 0006 and 0007 were written to match references that already existed in
 `slipway-blueprints/README.md`. 0005 is unclaimed: if it was meant for something

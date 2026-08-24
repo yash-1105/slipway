@@ -90,34 +90,34 @@ roles:
     context_window: 200000
     max_output_tokens: 128000
   test_author:
-    intent: GLM 4.7
+    intent: DeepSeek V4 Flash
     primary:
-      model_id: zai-org/glm-4.7
-      input_usd_per_mtok: '0.6'
-      output_usd_per_mtok: '2.2'
-      display_name: GLM-4.7
-      supports_responses_endpoint: false
-    fallback:
       model_id: deepseek/deepseek-v4-flash
       input_usd_per_mtok: '0.14'
       output_usd_per_mtok: '0.28'
       display_name: Deepseek V4 Flash
+      supports_responses_endpoint: false
+    fallback:
+      model_id: zai-org/glm-4.7
+      input_usd_per_mtok: '0.6'
+      output_usd_per_mtok: '2.2'
+      display_name: GLM-4.7
       supports_responses_endpoint: false
     context_window: 204800
     max_output_tokens: 131072
   doc_writer:
-    intent: GLM 4.7
+    intent: DeepSeek V4 Flash
     primary:
-      model_id: zai-org/glm-4.7
-      input_usd_per_mtok: '0.6'
-      output_usd_per_mtok: '2.2'
-      display_name: GLM-4.7
-      supports_responses_endpoint: false
-    fallback:
       model_id: deepseek/deepseek-v4-flash
       input_usd_per_mtok: '0.14'
       output_usd_per_mtok: '0.28'
       display_name: Deepseek V4 Flash
+      supports_responses_endpoint: false
+    fallback:
+      model_id: zai-org/glm-4.7
+      input_usd_per_mtok: '0.6'
+      output_usd_per_mtok: '2.2'
+      display_name: GLM-4.7
       supports_responses_endpoint: false
     context_window: 204800
     max_output_tokens: 131072
