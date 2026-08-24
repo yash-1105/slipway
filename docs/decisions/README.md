@@ -10,7 +10,7 @@ was not.
 | [0001](0001-seams.md) | Five seams behind Protocols | Accepted |
 | [0002](0002-layering.md) | Layering, and the direction of dependency | Accepted |
 | [0003](0003-uuidv7-identifiers.md) | UUIDv7 primary keys, generated in-process | Accepted |
-| [0004](0004-novita-base-url.md) | Novita base URL and API surface | **Proposed** — blocked on a live call |
+| [0004](0004-novita-base-url.md) | Novita base URL and API surface | Accepted |
 | 0005 | _unclaimed_ | — |
 | [0006](0006-scratch-org.md) | Generated repositories live in a scratch org | Accepted |
 | [0007](0007-prompts-and-evals-stay-in-slipway.md) | Prompts and evals stay in this repository | Accepted |

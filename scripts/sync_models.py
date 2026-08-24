@@ -81,25 +81,26 @@ def probe(base_url: str, api_key: str) -> tuple[int, list[dict[str, Any]], str]:
     return (response.status_code, models, "ok")
 
 
-def probe_responses_api(base_url: str, api_key: str) -> tuple[int, str]:
+def probe_responses_api(base_url: str, api_key: str, model_id: str) -> tuple[int, str]:
     """Does {base_url}/responses exist?
 
-    CLAUDE.md states Novita has no Responses API and the client must use chat
-    completions. That is a documented claim; this turns it into an observation.
-    A 404 or 405 confirms it. Anything that looks like the endpoint exists is
-    reported, not acted on.
+    Probed with a real model id. An earlier version sent an empty one and read
+    the resulting `404 MODEL_NOT_FOUND` as "no such route" -- but that 404 was
+    about the model, not the endpoint. A missing route answers `404 page not
+    found`; a route that exists rejects a model it does not serve with a 400.
+    The difference is the whole answer, and it is invisible without a real id.
     """
     try:
         response = httpx.post(
             f"{base_url}/responses",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={"model": "", "input": "ping"},
+            json={"model": model_id, "input": "ping"},
             timeout=TIMEOUT_SECONDS,
         )
     except httpx.HTTPError as exc:
         return (0, f"transport error: {type(exc).__name__}")
 
-    body = response.text[:160].replace("\n", " ").strip()
+    body = response.text[:200].replace("\n", " ").strip()
     return (response.status_code, body)
 
 
@@ -125,6 +126,59 @@ def propose(intent: str, model_ids: list[str]) -> list[str]:
         if hits >= max(1, len(tokens) - 1):
             scored.append((len(tokens) - hits, model_id))
     return [model_id for _, model_id in sorted(scored)][:5]
+
+
+def assign(
+    models: dict[str, dict[str, Any]], role: str, primary_id: str, fallback_id: str
+) -> dict[str, Any]:
+    """Build a role entry from the live model objects.
+
+    Every number here -- both prices, the context window, the output cap -- is
+    read off the provider's own response. A price typed by hand is a price that
+    is wrong the first time the provider changes it, and a ledger built on it is
+    wrong quietly.
+
+    Both ids are verified against the live list, so an id that no longer exists
+    fails here rather than at the first agent call.
+    """
+    entry: dict[str, Any] = {"intent": INTENDED.get(role, "")}
+
+    for slot, model_id in (("primary", primary_id), ("fallback", fallback_id)):
+        model = models.get(model_id)
+        if model is None:
+            raise SystemExit(
+                f"{role}.{slot}: {model_id!r} is not in the provider's model list. "
+                "Choose one from `available`."
+            )
+
+        pricing = model.get("pricing") or {}
+        prompt_price = (pricing.get("prompt") or {}).get("price_per_m_decimal")
+        completion_price = (pricing.get("completion") or {}).get("price_per_m_decimal")
+        if prompt_price is None or completion_price is None:
+            raise SystemExit(
+                f"{role}.{slot}: {model_id!r} publishes no price. Slipway will not "
+                "route to a model it cannot cost."
+            )
+
+        entry[slot] = {
+            "model_id": model_id,
+            "input_usd_per_mtok": str(prompt_price),
+            "output_usd_per_mtok": str(completion_price),
+            "display_name": str(model.get("display_name", "")),
+            "supports_responses_endpoint": "responses" in (model.get("endpoints") or []),
+        }
+
+    primary = models[primary_id]
+    # The pair has to share a ceiling, because a caller sized a prompt for the
+    # role, not for whichever model answered. Take the smaller of the two.
+    fallback = models[fallback_id]
+    entry["context_window"] = min(
+        int(primary.get("context_size", 0)), int(fallback.get("context_size", 0))
+    )
+    entry["max_output_tokens"] = min(
+        int(primary.get("max_output_tokens", 0)), int(fallback.get("max_output_tokens", 0))
+    )
+    return entry
 
 
 def main() -> int:
@@ -163,14 +217,21 @@ def main() -> int:
     base_url, models = winner
     ids = sorted({str(m.get("id", "")) for m in models if m.get("id")})
 
-    status, body = probe_responses_api(base_url, api_key)
-    supported = status not in (0, 404, 405, 501)
-    print(f"Responses API at {base_url}/responses: HTTP {status or 'error'}")
+    # A model the provider actually serves, so a 404 means the route is missing
+    # rather than the model being unknown.
+    sample_model = ids[0]
+    status, body = probe_responses_api(base_url, api_key, sample_model)
+    # `404 page not found` is a missing route. A 400 is a route that exists and
+    # rejected this model.
+    supported = status != 0 and not (status == 404 and "page not found" in body.lower())
+    print(f"Responses API at {base_url}/responses (probed with {sample_model}): "
+          f"HTTP {status or 'error'}")
     print(f"  {body}")
     print(
-        "  -> absent, as documented; chat completions only."
+        "  -> the route is absent; chat completions only."
         if not supported
-        else "  -> DID NOT 404. This contradicts CLAUDE.md. Reporting, not acting on it."
+        else "  -> THE ROUTE EXISTS. CLAUDE.md says Novita has no Responses API. "
+             "Reporting, not acting on it."
     )
     print()
 
@@ -196,10 +257,28 @@ def main() -> int:
         for model_id in matches or ["  (no candidate matched -- choose from `available`)"]:
             print(f"      {model_id}")
 
+    # --assign role=primary_id,fallback_id -- repeatable. The ids come from the
+    # list printed above; the prices come from the provider.
+    by_id = {str(m["id"]): m for m in models if m.get("id")}
+    for argument in sys.argv[1:]:
+        if not argument.startswith("--assign="):
+            raise SystemExit(f"unknown argument {argument!r}; expected --assign=role=a,b")
+        role, _, pair = argument.removeprefix("--assign=").partition("=")
+        primary_id, _, fallback_id = pair.partition(",")
+        if not (role and primary_id and fallback_id):
+            raise SystemExit(f"malformed {argument!r}; expected --assign=role=primary,fallback")
+        if role not in INTENDED:
+            raise SystemExit(f"unknown role {role!r}; expected one of {', '.join(INTENDED)}")
+        roles[role] = assign(by_id, role, primary_id, fallback_id)
+        print(f"assigned {role}: {primary_id} -> {fallback_id}")
+
     document = {
         "source_base_url": base_url,
         "synced_at": datetime.now(UTC).isoformat(timespec="seconds"),
-        "responses_api_supported": supported,
+        "responses_api_endpoint_exists": supported,
+        "models_supporting_responses_endpoint": sorted(
+            str(m["id"]) for m in models if "responses" in (m.get("endpoints") or [])
+        ),
         "roles": roles,
         "available": ids,
     }

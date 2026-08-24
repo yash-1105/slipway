@@ -10,7 +10,55 @@ the commit that did it. Do not delete entries.
 
 ---
 
+## 2026-08-24 — CLAUDE.md's Responses API claim is false
+
+CLAUDE.md states: *"Novita does NOT support the Responses API. Chat completions
+only."*
+
+The route exists at `https://api.novita.ai/openai/v1/responses`, and 7 of the
+150 models list `responses` in their `endpoints` array. Probing it with a real
+model id returns `400 INVALID_REQUEST_BODY: model ... does not support endpoint:
+responses` — a route that exists rejecting a model. Only `/openai` and
+`/v3/openai` return `404 page not found`, which is a route that does not.
+Evidence is in ADR 0004.
+
+**Nothing was changed in response to it, and nothing needs to be urgently.**
+Slipway still uses chat completions, correctly: none of the five models it
+routes to supports `responses`, and support is per-model, so a client built on
+it would work for 7 models and fail for 143.
+
+What is wrong is the sentence, not the behaviour. The rule it is written under —
+"no document may describe behaviour that is not covered by a test" — now applies
+to CLAUDE.md itself. The fix is one sentence, and it is a decision about the
+project's own constitution rather than a code change, so it is recorded here
+rather than made.
+
+## 2026-08-24 — Fallback models were chosen, not specified
+
+The prompt named the five primaries. It did not name fallbacks, and every role
+needs one. These were chosen and are **unconfirmed**:
+
+| Role | Primary | Fallback | Why this fallback |
+| --- | --- | --- | --- |
+| planner | `zai-org/glm-5.2` | `deepseek/deepseek-v4-pro` | different vendor, same 1M context |
+| builder | `moonshotai/kimi-k2.7-code` | `zai-org/glm-5.2` | different vendor, strong on code |
+| evaluator | `deepseek/deepseek-v4-flash` | `zai-org/glm-4.7-flash` | different vendor, both cheap |
+| test_author | `zai-org/glm-4.7` | `deepseek/deepseek-v4-flash` | different vendor, cheaper |
+| doc_writer | `zai-org/glm-4.7` | `deepseek/deepseek-v4-flash` | different vendor, cheaper |
+
+The rule applied was: a different vendor where one exists, since a rate limit or
+a capacity problem usually hits one family at a time; and a context window no
+smaller than the caller sized its prompt for. Changing any of them is one
+`--assign` and costs nothing.
+
+Also worth a decision: `zai-org/glm-5.3` exists, is the same price as 5.2
+(\$1.4/\$4.4 per Mtok), has the same 1M context, and is the newer model. It was
+not substituted, because the prompt said GLM 5.2.
+---
+
 ## 2026-08-24 — P4 stopped at the live probe: no Novita key
+
+**Resolved.** The key was supplied from the keychain; the probe ran, `config/models.yaml` is populated from the live endpoint and ADR 0004 is Accepted.
 
 `make models-sync`, moving ADR 0004 to Accepted, and the definition of done for
 this prompt (probe table, ledger rows from one real call per role, a forced

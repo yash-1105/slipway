@@ -92,11 +92,35 @@ def test_a_file_missing_a_role_is_refused_at_startup(tmp_path: Path) -> None:
         load_routing(write(tmp_path, partial), require_models=True)
 
 
-def test_the_unpopulated_file_that_ships_in_the_repo_is_refused() -> None:
-    """It ships empty on purpose, and must stop the process rather than be used."""
+def test_the_file_that_ships_in_the_repo_configures_every_role() -> None:
+    """The committed catalogue is the one a fresh checkout starts the seam with.
+
+    It was empty until the live probe ran; a checkout that cannot start the
+    models seam is worse than one whose ids are stale, and stale ids are caught
+    by re-running the sync.
+    """
     shipped = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
-    with pytest.raises(ConfigError, match="models-sync"):
-        load_routing(shipped, require_models=True)
+    routing = load_routing(shipped, require_models=True)
+
+    assert routing.source_base_url == "https://api.novita.ai/openai/v1"
+    for name in ALL_ROLES:
+        entry = routing.get_model(name)
+        assert entry.primary.model_id in routing.available
+        assert entry.fallback.model_id in routing.available
+        assert entry.primary.model_id != entry.fallback.model_id
+        assert entry.primary.input_usd_per_mtok > 0
+        assert entry.primary.output_usd_per_mtok > 0
+        assert entry.context_window > 0
+
+
+def test_no_role_falls_back_to_its_own_primary() -> None:
+    """A fallback that is the primary is not a fallback."""
+    shipped = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
+    routing = load_routing(shipped, require_models=True)
+
+    for name in ALL_ROLES:
+        entry = routing.get_model(name)
+        assert entry.primary.model_id != entry.fallback.model_id
 
 
 def test_an_empty_file_is_allowed_when_the_models_seam_is_fake(tmp_path: Path) -> None:
