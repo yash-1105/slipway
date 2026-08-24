@@ -15,6 +15,7 @@ from uuid import UUID
 from app.domain.entities import (
     Approval,
     ArtifactRef,
+    CostEntry,
     Event,
     Gate,
     Job,
@@ -37,6 +38,7 @@ class InMemoryStore:
         self.approvals: dict[tuple[UUID, Gate], Approval] = {}
         self.artifacts: list[ArtifactRef] = []
         self.ports: dict[UUID, PortAllocation] = {}
+        self.costs: list[CostEntry] = []
 
 
 class _Runs:
@@ -195,6 +197,21 @@ class _Ports:
         ]
 
 
+class _Costs:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._s = store
+
+    async def record(self, entry: CostEntry) -> CostEntry:
+        self._s.costs.append(entry)
+        return entry
+
+    async def record_many(self, entries: list[CostEntry]) -> None:
+        self._s.costs.extend(entries)
+
+    async def list_for_run(self, run_id: UUID) -> list[CostEntry]:
+        return [c for c in self._s.costs if c.run_id == run_id]
+
+
 class InMemoryUnitOfWork:
     """Implements app.domain.repositories.UnitOfWork over an InMemoryStore.
 
@@ -211,6 +228,7 @@ class InMemoryUnitOfWork:
         self.approvals = _Approvals(store)
         self.artifacts = _Artifacts(store)
         self.ports = _Ports(store)
+        self.costs = _Costs(store)
         self.commits = 0
 
     async def __aenter__(self) -> InMemoryUnitOfWork:

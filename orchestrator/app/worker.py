@@ -19,9 +19,10 @@ import structlog
 
 from app.config import Settings, get_settings
 from app.container import Container, build_container
-from app.domain.entities import Job, Trigger
+from app.domain.entities import CostEntry, Job, Trigger
 from app.domain.errors import IllegalTransitionError, SlipwayError
 from app.logging import configure_logging
+from app.models.router import CallContext, acting_as
 from app.runtimes.base import GraphInvocation, GraphOutcome
 from app.services.runs import RunService
 
@@ -97,19 +98,29 @@ class Worker:
 
     async def _run_graph_job(self, job: Job, graph: str) -> None:
         run = await self._c.runs.get(job.run_id)
-        result = await self._c.runtime.invoke(
-            GraphInvocation(
-                run_id=job.run_id,
-                graph=graph,
-                inputs={"run_id": str(job.run_id), "brief": run.brief},
-                idempotency_key=job.idempotency_key,
-            ),
-            timeout_seconds=self._settings.model_timeout_seconds * 4,
-        )
+
+        # Every model call the graph makes is attributed to this run and this
+        # job. The graph does not have to know: the router reads the context.
+        with acting_as(
+            CallContext(run_id=job.run_id, job_id=job.id, actor=self._actor())
+        ):
+            result = await self._c.runtime.invoke(
+                GraphInvocation(
+                    run_id=job.run_id,
+                    graph=graph,
+                    inputs={"run_id": str(job.run_id), "brief": run.brief},
+                    idempotency_key=job.idempotency_key,
+                ),
+                timeout_seconds=self._settings.model_timeout_seconds * 4,
+            )
+
+        # Drained after the graph, committed with the outcome below. Cost and
+        # outcome go into one transaction or neither does.
+        costs = self._drain_costs(job.run_id)
 
         if isinstance(result, GraphOutcome) and not result.outputs.get("failure"):
             await self._store_outputs(job, result)
-            await self._c.jobs.succeed(job)
+            await self._c.jobs.succeed(job, costs=costs)
             await self._advance(self._c.runs, job.run_id, Trigger.AGENT_SUCCEEDED, detail=graph)
             return
 
@@ -118,9 +129,45 @@ class Worker:
             if isinstance(result, GraphOutcome)
             else f"{result.reason}: {result.detail}"
         )
-        will_retry = await self._c.jobs.fail(job, detail)
+        # A failed graph still spent tokens.
+        will_retry = await self._c.jobs.fail(job, detail, costs=costs)
         if not will_retry:
             await self._advance(self._c.runs, job.run_id, Trigger.AGENT_FAILED, detail=detail)
+
+    def _actor(self) -> str:
+        """Who a worker-initiated model call is on behalf of.
+
+        The worker, named by its lease id, because that is who can be asked what
+        happened. A run started by a person records that person on the gate
+        decisions in the event log; the ledger records the process that spent
+        the money.
+        """
+        return f"worker:{self._settings.effective_worker_id}"
+
+    def _drain_costs(self, run_id: UUID) -> list[CostEntry]:
+        """Turn the router's priced calls into ledger entries for this run."""
+        from app.domain.ids import uuid7
+
+        now = datetime.now(UTC)
+        return [
+            CostEntry(
+                id=uuid7(),
+                run_id=record.run_id,
+                job_id=record.job_id,
+                role=record.role,
+                model_requested=record.model_requested,
+                model_used=record.model_used,
+                prompt_tokens=record.prompt_tokens,
+                completion_tokens=record.completion_tokens,
+                usd=record.usd,
+                inr=record.inr,
+                usd_to_inr=record.usd_to_inr,
+                priced=record.priced,
+                actor=record.actor,
+                created_at=now,
+            )
+            for record in self._c.costs.drain(run_id)
+        ]
 
     async def _store_outputs(self, job: Job, result: GraphOutcome) -> None:
         from app.artifacts.base import ArtifactFailure

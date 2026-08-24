@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.db.repositories import (
     SqlApprovalRepository,
     SqlArtifactRepository,
+    SqlCostRepository,
     SqlEventRepository,
     SqlJobRepository,
     SqlPortAllocationRepository,
@@ -37,6 +38,7 @@ class SqlUnitOfWork:
         self.approvals = SqlApprovalRepository(session)
         self.artifacts = SqlArtifactRepository(session)
         self.ports = SqlPortAllocationRepository(session)
+        self.costs = SqlCostRepository(session)
         return self
 
     async def __aexit__(

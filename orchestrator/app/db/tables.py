@@ -19,6 +19,7 @@ from sqlalchemy import (
     DateTime,
     Integer,
     MetaData,
+    Numeric,
     Table,
     Text,
 )
@@ -116,6 +117,25 @@ port_allocations = Table(
     Column("port", Integer, nullable=False),
     Column("allocated_at", DateTime(timezone=True), nullable=False),
     Column("released_at", DateTime(timezone=True)),
+)
+
+cost_entries = Table(
+    "cost_entries",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column("run_id", UUID(as_uuid=True), nullable=False),
+    Column("job_id", UUID(as_uuid=True)),
+    Column("role", Text, nullable=False),
+    Column("model_requested", Text, nullable=False),
+    Column("model_used", Text, nullable=False),
+    Column("prompt_tokens", Integer, nullable=False),
+    Column("completion_tokens", Integer, nullable=False),
+    Column("usd", Numeric(18, 8), nullable=False),
+    Column("inr", Numeric(18, 6), nullable=False),
+    Column("usd_to_inr", Numeric(12, 6), nullable=False),
+    Column("priced", Boolean, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
 run_transitions = Table(

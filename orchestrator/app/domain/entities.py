@@ -5,6 +5,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 
@@ -149,6 +150,37 @@ class ArtifactRef:
     sha256: str
     size_bytes: int
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CostEntry:
+    """What one model call cost, and who it was for.
+
+    `model_used` is what the provider says it served, which is not always what
+    was asked for: a fallback fires, or the provider substitutes. The ledger
+    records what happened.
+    """
+
+    id: UUID
+    run_id: UUID
+    role: str
+    model_requested: str
+    model_used: str
+    prompt_tokens: int
+    completion_tokens: int
+    usd: Decimal
+    inr: Decimal
+    usd_to_inr: Decimal
+    actor: str
+    created_at: datetime
+    job_id: UUID | None = None
+    #: False when the provider served a model with no published price, so the
+    #: amounts are an estimate rather than a measurement.
+    priced: bool = True
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
 
 @dataclass(frozen=True, slots=True)

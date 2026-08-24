@@ -8,7 +8,7 @@ from uuid import UUID
 
 import structlog
 
-from app.domain.entities import Event, Job, JobStatus
+from app.domain.entities import CostEntry, Event, Job, JobStatus
 from app.domain.ids import uuid7
 from app.domain.repositories import UnitOfWork
 
@@ -58,9 +58,17 @@ class JobService:
             log.warning("job.lease_lost", job_id=str(job_id), worker=self._worker_id)
         return held
 
-    async def succeed(self, job: Job) -> None:
+    async def succeed(self, job: Job, *, costs: list[CostEntry] | None = None) -> None:
+        """Finish a job, and write what it cost in the same transaction.
+
+        One transaction on purpose: a committed outcome with uncommitted cost
+        means a run that looks free, and committed cost with no outcome means
+        money attributed to work nobody can find. Neither is recoverable after
+        the fact, because there is nothing to reconcile against.
+        """
         async with self._uow() as uow:
             await uow.jobs.finish(job.id, status=JobStatus.SUCCEEDED)
+            await uow.costs.record_many(costs or [])
             await uow.events.append(
                 Event(
                     id=uuid7(),
@@ -72,7 +80,14 @@ class JobService:
             )
             await uow.commit()
 
-    async def fail(self, job: Job, error: str, *, terminal: bool = False) -> bool:
+    async def fail(
+        self,
+        job: Job,
+        error: str,
+        *,
+        terminal: bool = False,
+        costs: list[CostEntry] | None = None,
+    ) -> bool:
         """Record a failed attempt.
 
         Returns True if the job will be retried, False if it is exhausted. The
@@ -89,6 +104,9 @@ class JobService:
 
         async with self._uow() as uow:
             await uow.jobs.finish(job.id, status=status, error=error)
+            # A failed call still spent tokens. Recording cost only on success
+            # would make the expensive failures the invisible ones.
+            await uow.costs.record_many(costs or [])
             await uow.events.append(
                 Event(
                     id=uuid7(),

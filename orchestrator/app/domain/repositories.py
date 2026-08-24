@@ -15,6 +15,7 @@ from uuid import UUID
 from app.domain.entities import (
     Approval,
     ArtifactRef,
+    CostEntry,
     Event,
     Gate,
     Job,
@@ -99,6 +100,16 @@ class PortAllocationRepository(Protocol):
     async def list_active(self, *, host: str) -> list[PortAllocation]: ...
 
 
+class CostRepository(Protocol):
+    async def record(self, entry: CostEntry) -> CostEntry: ...
+
+    async def record_many(self, entries: list[CostEntry]) -> None:
+        """Write several entries. Used by the worker to commit a job's cost
+        alongside the job's outcome, in one transaction."""
+
+    async def list_for_run(self, run_id: UUID) -> list[CostEntry]: ...
+
+
 class UnitOfWork(Protocol):
     """One transaction spanning several repositories.
 
@@ -124,6 +135,9 @@ class UnitOfWork(Protocol):
 
     @property
     def ports(self) -> PortAllocationRepository: ...
+
+    @property
+    def costs(self) -> CostRepository: ...
 
     async def __aenter__(self) -> UnitOfWork: ...
 

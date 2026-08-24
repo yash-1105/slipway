@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
+import yaml
 
 from app.config import Settings
 from app.container import Container, build_container
@@ -24,12 +25,53 @@ from tests.integration.conftest import (  # noqa: F401  -- fixtures are used by 
 PROMPTS = Path(__file__).resolve().parents[3] / "prompts"
 
 
+#: A routing table for the fake backend. The ids and prices are obviously not
+#: real -- nothing here is a provider model id -- but they are explicit, so the
+#: ledger rows these tests produce have numbers that can be checked by hand.
+FAKE_ROUTING: dict[str, object] = {
+    "source_base_url": "fake://models",
+    "synced_at": "2026-01-01T00:00:00+00:00",
+    "roles": {
+        name: {
+            "intent": f"whatever {name} is meant to use",
+            "context_window": 128000,
+            "max_output_tokens": 8192,
+            "primary": {
+                "model_id": f"fake/{name}-primary",
+                "input_usd_per_mtok": 2,
+                "output_usd_per_mtok": 10,
+            },
+            "fallback": {
+                "model_id": f"fake/{name}-fallback",
+                "input_usd_per_mtok": 1,
+                "output_usd_per_mtok": 4,
+            },
+        }
+        for name in ("planner", "builder", "evaluator", "test_author", "doc_writer")
+    },
+    "available": [],
+}
+
+#: The rate these tests convert at. A round number so an INR figure in a
+#: failure message is legible.
+TEST_USD_TO_INR = 80.0
+
+
 @pytest.fixture(scope="session")
-def settings() -> Settings:
+def models_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("models") / "models.yaml"
+    path.write_text(yaml.safe_dump(FAKE_ROUTING))
+    return path
+
+
+@pytest.fixture(scope="session")
+def settings(models_file: Path) -> Settings:
     url = _database_url()
     if not url:
         pytest.skip("set SLIPWAY_DATABASE_URL (or run `make test-acceptance`)")
     return Settings(
+        models_catalogue_path=models_file,
+        usd_to_inr=TEST_USD_TO_INR,
         database_url=url,
         models_backend="fake",
         runtime_backend="langgraph_local",

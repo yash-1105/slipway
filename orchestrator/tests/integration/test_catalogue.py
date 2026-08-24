@@ -1,27 +1,46 @@
-"""Loading config/models.yaml. Reads a real file, so not a unit test."""
+"""Parsing config/models.yaml. Reads a real file, so not a unit test."""
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
 
 from app.domain.errors import ConfigError
+from app.models.router import load_routing
 from app.services.catalogue import load_catalogue
 
-POPULATED = {
+
+def role(**overrides: Any) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "intent": "an intended model family",
+        "context_window": 128000,
+        "max_output_tokens": 8192,
+        "primary": {
+            "model_id": "vendor-a/primary-model",
+            "input_usd_per_mtok": 2,
+            "output_usd_per_mtok": 10,
+        },
+        "fallback": {
+            "model_id": "vendor-b/fallback-model",
+            "input_usd_per_mtok": 1,
+            "output_usd_per_mtok": 4,
+        },
+    }
+    entry.update(overrides)
+    return entry
+
+
+ALL_ROLES = ["planner", "builder", "evaluator", "test_author", "doc_writer"]
+
+POPULATED: dict[str, Any] = {
     "source_base_url": "https://api.novita.ai/openai/v1",
     "synced_at": "2026-08-24T00:00:00+00:00",
-    "roles": {
-        "spec": {
-            "model_id": "some/model-id-from-the-provider",
-            "context_window": 128000,
-            "max_output_tokens": 8192,
-            "notes": "chosen for long briefs",
-        }
-    },
-    "available": ["some/model-id-from-the-provider"],
+    "roles": {name: role() for name in ALL_ROLES},
+    "available": ["vendor-a/primary-model", "vendor-b/fallback-model"],
 }
 
 
@@ -31,46 +50,117 @@ def write(tmp_path: Path, document: object) -> Path:
     return path
 
 
-def test_a_populated_catalogue_resolves_a_role(tmp_path: Path) -> None:
+def test_a_populated_file_resolves_every_role(tmp_path: Path) -> None:
+    routing = load_routing(write(tmp_path, POPULATED), require_models=True)
+
+    for name in ALL_ROLES:
+        entry = routing.get_model(name)
+        assert entry.primary.model_id == "vendor-a/primary-model"
+        assert entry.fallback.model_id == "vendor-b/fallback-model"
+        assert entry.primary.input_usd_per_mtok == Decimal("2")
+
+
+def test_prices_are_decimals_not_floats(tmp_path: Path) -> None:
+    routing = load_routing(write(tmp_path, POPULATED), require_models=True)
+    pricing = routing.get_model("planner").primary
+
+    assert isinstance(pricing.input_usd_per_mtok, Decimal)
+    assert isinstance(pricing.output_usd_per_mtok, Decimal)
+
+
+def test_the_flat_catalogue_shows_the_primary(tmp_path: Path) -> None:
     catalogue = load_catalogue(write(tmp_path, POPULATED), require_models=True)
 
-    spec = catalogue.resolve("spec")
+    spec = catalogue.resolve("planner")
     assert spec is not None
-    assert spec.model_id == "some/model-id-from-the-provider"
-    assert catalogue.synced_at == "2026-08-24T00:00:00+00:00"
+    assert spec.model_id == "vendor-a/primary-model"
 
 
-def test_an_unconfigured_role_resolves_to_nothing_rather_than_a_guess(tmp_path: Path) -> None:
-    """No model id is ever invented; an unassigned role must come back empty."""
-    catalogue = load_catalogue(write(tmp_path, POPULATED), require_models=True)
-    assert catalogue.resolve("build") is None
+def test_a_role_that_is_not_configured_names_itself(tmp_path: Path) -> None:
+    """No model id is ever invented; an unassigned role must stop the caller."""
+    partial = {**POPULATED, "roles": {"planner": role()}}
+    routing = load_routing(write(tmp_path, partial), require_models=False)
+
+    with pytest.raises(ConfigError, match="builder"):
+        routing.get_model("builder")
 
 
-def test_the_unpopulated_catalogue_that_ships_in_the_repo_is_refused() -> None:
+def test_a_file_missing_a_role_is_refused_at_startup(tmp_path: Path) -> None:
+    partial = {**POPULATED, "roles": {"planner": role()}}
+
+    with pytest.raises(ConfigError, match="builder, evaluator, test_author, doc_writer"):
+        load_routing(write(tmp_path, partial), require_models=True)
+
+
+def test_the_unpopulated_file_that_ships_in_the_repo_is_refused() -> None:
     """It ships empty on purpose, and must stop the process rather than be used."""
     shipped = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
     with pytest.raises(ConfigError, match="models-sync"):
-        load_catalogue(shipped, require_models=True)
+        load_routing(shipped, require_models=True)
 
 
-def test_an_empty_catalogue_is_allowed_when_the_models_seam_is_fake(tmp_path: Path) -> None:
-    """A checkout with no Novita key still boots for tests and frontend work."""
-    catalogue = load_catalogue(tmp_path / "absent.yaml", require_models=False)
-    assert catalogue.by_role == {}
-    assert catalogue.synced_at == "never"
+def test_an_empty_file_is_allowed_when_the_models_seam_is_fake(tmp_path: Path) -> None:
+    routing = load_routing(tmp_path / "absent.yaml", require_models=False)
+
+    assert routing.by_role == {}
+    assert routing.synced_at == "never"
 
 
-def test_a_missing_catalogue_is_refused_when_models_are_required(tmp_path: Path) -> None:
+def test_a_missing_file_is_refused_when_models_are_required(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="make models-sync"):
-        load_catalogue(tmp_path / "absent.yaml", require_models=True)
+        load_routing(tmp_path / "absent.yaml", require_models=True)
 
 
-def test_a_role_missing_a_field_names_the_field(tmp_path: Path) -> None:
-    broken = {**POPULATED, "roles": {"spec": {"model_id": "x", "context_window": 1}}}
-    with pytest.raises(ConfigError, match="max_output_tokens"):
-        load_catalogue(write(tmp_path, broken), require_models=True)
+def test_a_role_without_a_fallback_is_refused(tmp_path: Path) -> None:
+    """Every role has a fallback. A role with one model has no answer to an outage."""
+    without_fallback = {k: v for k, v in role().items() if k != "fallback"}
+    broken = {**POPULATED, "roles": {"planner": without_fallback}}
+
+    with pytest.raises(ConfigError, match="fallback"):
+        load_routing(write(tmp_path, broken), require_models=False)
 
 
-def test_a_catalogue_that_is_not_a_mapping_is_refused(tmp_path: Path) -> None:
+def test_a_model_without_a_price_is_refused(tmp_path: Path) -> None:
+    """An unpriced model produces ledger rows that cannot be totalled."""
+    priceless = role(primary={"model_id": "vendor-a/primary-model"})
+    broken = {**POPULATED, "roles": {"planner": priceless}}
+
+    with pytest.raises(ConfigError, match="input_usd_per_mtok"):
+        load_routing(write(tmp_path, broken), require_models=False)
+
+
+def test_a_negative_price_is_refused(tmp_path: Path) -> None:
+    negative = role(
+        primary={
+            "model_id": "vendor-a/primary-model",
+            "input_usd_per_mtok": -1,
+            "output_usd_per_mtok": 10,
+        }
+    )
+    broken = {**POPULATED, "roles": {"planner": negative}}
+
+    with pytest.raises(ConfigError, match="negative"):
+        load_routing(write(tmp_path, broken), require_models=False)
+
+
+def test_an_empty_model_id_is_refused(tmp_path: Path) -> None:
+    """A blank id is what an unfinished sync leaves behind."""
+    blank = role(
+        primary={"model_id": "  ", "input_usd_per_mtok": 1, "output_usd_per_mtok": 2}
+    )
+    broken = {**POPULATED, "roles": {"planner": blank}}
+
+    with pytest.raises(ConfigError, match="model_id is empty"):
+        load_routing(write(tmp_path, broken), require_models=False)
+
+
+def test_a_file_that_is_not_a_mapping_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="not a YAML mapping"):
-        load_catalogue(write(tmp_path, ["not", "a", "mapping"]), require_models=True)
+        load_routing(write(tmp_path, ["not", "a", "mapping"]), require_models=True)
+
+
+def test_the_available_list_is_carried_through(tmp_path: Path) -> None:
+    routing = load_routing(write(tmp_path, POPULATED), require_models=True)
+
+    assert routing.available == ("vendor-a/primary-model", "vendor-b/fallback-model")
+    assert routing.source_base_url == "https://api.novita.ai/openai/v1"

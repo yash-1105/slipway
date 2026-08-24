@@ -49,7 +49,7 @@ def build_registry(
         {
             "specify": _single_call_graph(
                 node="specify",
-                role="spec",
+                role="planner",
                 prompt="specify",
                 output_key="spec",
                 models=models,
@@ -58,7 +58,7 @@ def build_registry(
             ),
             "build": _single_call_graph(
                 node="build",
-                role="build",
+                role="builder",
                 prompt="build",
                 output_key="build_log",
                 models=models,
@@ -67,7 +67,7 @@ def build_registry(
             ),
             "test": _single_call_graph(
                 node="test",
-                role="test",
+                role="test_author",
                 prompt="test",
                 output_key="test_report",
                 models=models,

@@ -28,11 +28,11 @@ from app.deploy.factory import build_deployer
 from app.domain.repositories import UnitOfWork
 from app.models.base import ModelCatalogue, ModelClient
 from app.models.factory import build_model_client
+from app.models.router import CostCollector, RoutingTable, catalogue_for, load_routing
 from app.runtimes.base import GraphRuntime
 from app.runtimes.factory import build_runtime
 from app.sandbox.base import Sandbox
 from app.sandbox.factory import build_sandbox
-from app.services.catalogue import load_catalogue
 from app.services.health import HealthService
 from app.services.jobs import JobService
 from app.services.migrations import MigrationService
@@ -48,7 +48,9 @@ class Container:
     engine: AsyncEngine
     uow: Callable[[], UnitOfWork]
     catalogue: ModelCatalogue
+    routing: RoutingTable
     models: ModelClient
+    costs: CostCollector
     sandbox: Sandbox
     deployer: Deployer
     artifacts: ArtifactStore
@@ -73,11 +75,15 @@ def build_container(settings: Settings, *, prompts_root: Path | None = None) -> 
     def uow_factory() -> UnitOfWork:
         return SqlUnitOfWork(session_factory)
 
-    catalogue = load_catalogue(
+    routing = load_routing(
         settings.models_catalogue_path,
         require_models=settings.models_backend != "fake",
     )
-    models = build_model_client(settings, catalogue)
+    catalogue = catalogue_for(routing, "primary")
+    # One collector, shared by the router that fills it and the worker that
+    # drains it. Nothing else touches it.
+    costs = CostCollector()
+    models = build_model_client(settings, routing, costs)
     sandbox = build_sandbox(settings)
     deployer = build_deployer(settings)
     artifacts = build_artifact_store(settings)
@@ -93,7 +99,9 @@ def build_container(settings: Settings, *, prompts_root: Path | None = None) -> 
         engine=engine,
         uow=uow_factory,
         catalogue=catalogue,
+        routing=routing,
         models=models,
+        costs=costs,
         sandbox=sandbox,
         deployer=deployer,
         artifacts=artifacts,

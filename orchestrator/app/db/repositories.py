@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import and_, insert, or_, select, update
@@ -13,6 +14,7 @@ from app.db import tables as t
 from app.domain.entities import (
     Approval,
     ArtifactRef,
+    CostEntry,
     Event,
     Gate,
     Job,
@@ -349,6 +351,38 @@ class SqlArtifactRepository:
         return [_to_artifact(dict(r)) for r in rows]
 
 
+class SqlCostRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def record(self, entry: CostEntry) -> CostEntry:
+        await self._s.execute(insert(t.cost_entries).values(**_cost_values(entry)))
+        return entry
+
+    async def record_many(self, entries: list[CostEntry]) -> None:
+        if not entries:
+            return
+        # One statement. These are written inside the transaction that records
+        # the job outcome, so the fewer round trips held open there the better.
+        await self._s.execute(
+            insert(t.cost_entries), [_cost_values(entry) for entry in entries]
+        )
+
+    async def list_for_run(self, run_id: UUID) -> list[CostEntry]:
+        rows = (
+            (
+                await self._s.execute(
+                    select(t.cost_entries)
+                    .where(t.cost_entries.c.run_id == run_id)
+                    .order_by(t.cost_entries.c.id)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_to_cost_entry(dict(r)) for r in rows]
+
+
 class SqlPortAllocationRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
@@ -418,6 +452,44 @@ class SqlPortAllocationRepository:
         ]
 
 
+def _cost_values(entry: CostEntry) -> dict[str, object]:
+    return {
+        "id": entry.id,
+        "run_id": entry.run_id,
+        "job_id": entry.job_id,
+        "role": entry.role,
+        "model_requested": entry.model_requested,
+        "model_used": entry.model_used,
+        "prompt_tokens": entry.prompt_tokens,
+        "completion_tokens": entry.completion_tokens,
+        "usd": entry.usd,
+        "inr": entry.inr,
+        "usd_to_inr": entry.usd_to_inr,
+        "priced": entry.priced,
+        "actor": entry.actor,
+        "created_at": entry.created_at,
+    }
+
+
+def _to_cost_entry(row: dict[str, object]) -> CostEntry:
+    return CostEntry(
+        id=row["id"],  # type: ignore[arg-type]
+        run_id=row["run_id"],  # type: ignore[arg-type]
+        job_id=row["job_id"],  # type: ignore[arg-type]
+        role=str(row["role"]),
+        model_requested=str(row["model_requested"]),
+        model_used=str(row["model_used"]),
+        prompt_tokens=int(row["prompt_tokens"]),  # type: ignore[call-overload]
+        completion_tokens=int(row["completion_tokens"]),  # type: ignore[call-overload]
+        usd=Decimal(str(row["usd"])),
+        inr=Decimal(str(row["inr"])),
+        usd_to_inr=Decimal(str(row["usd_to_inr"])),
+        priced=bool(row["priced"]),
+        actor=str(row["actor"]),
+        created_at=row["created_at"],  # type: ignore[arg-type]
+    )
+
+
 def _to_run(row: dict[str, object]) -> Run:
     return Run(
         id=row["id"],  # type: ignore[arg-type]
@@ -462,6 +534,7 @@ def _to_artifact(row: dict[str, object]) -> ArtifactRef:
 __all__ = [
     "SqlApprovalRepository",
     "SqlArtifactRepository",
+    "SqlCostRepository",
     "SqlEventRepository",
     "SqlJobRepository",
     "SqlPortAllocationRepository",

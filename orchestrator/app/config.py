@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     job_max_attempts: int = 5
     worker_kinds: tuple[str, ...] = ("specify", "build", "test", "deploy", "reconcile")
 
+    # --- cost ledger --------------------------------------------------------
+    #: Rate every ledger row is converted at, stored per row so a historical
+    #: total does not silently change when the rate moves. No default that
+    #: looks like a real rate: an invented number here becomes an invented
+    #: number in the accounts.
+    usd_to_inr: float = 0.0
+
     # --- budget ------------------------------------------------------------
     budget_daily_usd_cap: float = 25.0
     budget_run_usd_cap: float = 5.0
@@ -124,6 +131,13 @@ class Settings(BaseSettings):
         if self.models_backend == "novita" and not self.novita_api_key:
             problems.append(
                 "SLIPWAY_NOVITA_API_KEY is required when SLIPWAY_MODELS_BACKEND=novita"
+            )
+
+        if self.models_backend == "novita" and self.usd_to_inr <= 0:
+            problems.append(
+                "SLIPWAY_USD_TO_INR must be set to a positive rate when "
+                "SLIPWAY_MODELS_BACKEND=novita; every ledger row records the "
+                "rate it was converted at and there is no sensible default"
             )
 
         if self.deploy_backend == "compose_ssh":

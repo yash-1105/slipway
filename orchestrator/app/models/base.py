@@ -1,8 +1,8 @@
 """models seam: talking to an LLM.
 
-Callers pass a logical *role* -- "spec", "build", "review" -- never a model id.
-Roles resolve to ids through config/models.yaml, which is generated from the
-live /models endpoint. No model id is typed from memory anywhere.
+Callers pass a logical *role* -- "planner", "builder", "evaluator" -- never a
+model id. Roles resolve to ids through config/models.yaml, which is generated
+from the live /models endpoint. No model id is typed from memory anywhere.
 
 Novita implements chat completions only; it has no Responses API.
 """
@@ -12,7 +12,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
-Role = Literal["spec", "build", "review", "test"]
+#: The logical roles a caller may ask for. A caller names one of these; it never
+#: names a model. Which model a role resolves to -- and which model it falls
+#: back to -- is app/models/router.py reading config/models.yaml.
+#:
+#: "spec" is legacy and is not configured in config/models.yaml. It remains in
+#: the union solely so app/models/impl/novita.py, which is finished and tested,
+#: continues to type-check without being edited: its `ping()` names that role.
+#: The router's own `ping()` uses "planner", so the legacy path is never taken.
+Role = Literal[
+    "planner",
+    "builder",
+    "evaluator",
+    "test_author",
+    "doc_writer",
+    "spec",
+]
 
 
 @dataclass(frozen=True, slots=True)

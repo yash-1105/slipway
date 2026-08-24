@@ -10,6 +10,29 @@ the commit that did it. Do not delete entries.
 
 ---
 
+## 2026-08-24 — P4 stopped at the live probe: no Novita key
+
+`make models-sync`, moving ADR 0004 to Accepted, and the definition of done for
+this prompt (probe table, ledger rows from one real call per role, a forced
+fallback against the real provider) all need `SLIPWAY_NOVITA_API_KEY`. It is not
+in the environment, not in any dotfile, and not in the keychain.
+
+The router, the cost ledger and the sync script are built and tested. What is
+not done, and cannot be without the key:
+
+- `config/models.yaml` has no model ids, so no role is assigned. That is the
+  designed state: the models seam refuses to start and names the unconfigured
+  roles. It is not a placeholder to be filled in from memory.
+- ADR 0004 stays **Proposed**. The base URL is still unverified.
+- Whether Novita exposes a Responses API is still a documented claim rather than
+  an observation. `scripts/sync_models.py` probes `/responses` and reports it.
+
+Nothing was invented to work around this. The intended families are recorded in
+`scripts/sync_models.py` as families in a person's words -- "GLM 5.2" -- which
+is not a model id; the script proposes matches from what the endpoint returns
+and a human confirms.
+---
+
 ## 2026-08-24 — "Each is a GitHub template repository" is not achievable as written
 
 **Resolved.** ADR 0008 settles it: blueprints stay directories, instantiated by

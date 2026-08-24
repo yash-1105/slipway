@@ -1,23 +1,48 @@
-# GENERATED FILE -- do not edit by hand.
+# GENERATED FILE -- do not edit by hand, except `roles`.
 #
 # Written by scripts/sync_models.py from a live GET {base_url}/models against
-# Novita. Every model id in Slipway is read from here; none is ever typed from
-# memory. See docs/decisions/0004-novita-base-url.md.
+# Novita. Model ids here are exactly what the provider returned; none is ever
+# typed from memory. See docs/decisions/0004-novita-base-url.md.
 #
 # To populate it:
 #     export SLIPWAY_NOVITA_API_KEY=...
 #     make models-sync
 #
-# Until then `roles` is empty, the models seam refuses to construct a client,
-# and the process fails at startup with a message saying so -- rather than
-# failing at the first agent call with a 404 that looks like an auth problem.
+# Until then `roles` is empty, app/models/router.py refuses to start the models
+# seam, and the process fails at startup naming the unconfigured roles -- rather
+# than failing at the first agent call with a 404 that looks like an auth
+# problem.
+#
+# `roles` is a human decision and is preserved across syncs. Every role needs a
+# primary, a fallback, and both published prices:
+#
+#   roles:
+#     planner:
+#       intent: GLM 5.2            # the family a human asked for, not an id
+#       context_window: 128000
+#       max_output_tokens: 8192
+#       primary:
+#         model_id: <copy an id from `available` below>
+#         input_usd_per_mtok: <published price>
+#         output_usd_per_mtok: <published price>
+#       fallback:
+#         model_id: <a different id from `available`>
+#         input_usd_per_mtok: <published price>
+#         output_usd_per_mtok: <published price>
+#
+# Roles that must be configured before the seam will start:
+#   planner, builder, evaluator, test_author, doc_writer
 
 source_base_url: ""
 synced_at: "never"
 
-# role -> the model that role uses. Populated by the sync.
+# Whether the provider exposes a Responses API. Recorded by the sync as an
+# observation. CLAUDE.md states Novita does not; until a sync has run, this is
+# null because nobody has looked.
+responses_api_supported: null
+
+# role -> routing. Populated by a human, from `available` below.
 roles: {}
 
-# The full list the provider returned, for reference when choosing a role's
-# model. Also populated by the sync.
+# Every model id the provider returned, exactly as returned. Populated by the sync.
 available: []

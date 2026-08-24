@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 import pytest
@@ -380,3 +381,83 @@ async def test_the_refusal_is_not_retried(container: Container, worker: Worker) 
     assert await container.jobs.claim(frozenset({"deploy"})) is None
     async with container.uow() as uow:
         assert await uow.jobs.list_expired(now=datetime.now(UTC)) == []
+
+
+async def test_every_model_call_lands_in_the_ledger(
+    container: Container, worker: Worker
+) -> None:
+    """Cost is recorded per call, attributed to the run, with the acting user."""
+    run = await container.runs.create("a brief")
+    await drain(worker, container)  # the planner stage
+
+    async with container.uow() as uow:
+        entries = await uow.costs.list_for_run(run.id)
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.role == "planner"
+    assert entry.model_used == "fake/planner-primary"
+    assert entry.model_requested == "fake/planner-primary"
+    assert entry.prompt_tokens > 0
+    assert entry.actor.startswith("worker:")
+    assert entry.usd > 0
+    assert entry.inr == entry.usd * entry.usd_to_inr
+    assert entry.priced is True
+
+
+async def test_the_ledger_records_the_rate_it_converted_at(
+    container: Container, worker: Worker
+) -> None:
+    """A historical total must not change when the rate moves."""
+    from tests.acceptance.conftest import TEST_USD_TO_INR
+
+    run = await container.runs.create("a brief")
+    await drain(worker, container)
+
+    async with container.uow() as uow:
+        (entry,) = await uow.costs.list_for_run(run.id)
+
+    assert entry.usd_to_inr == Decimal(str(TEST_USD_TO_INR))
+
+
+async def test_every_stage_of_a_run_is_costed_against_that_run(
+    container: Container, worker: Worker
+) -> None:
+    run = await container.runs.create("a brief")
+    await drain(worker, container)
+    await container.runs.decide(run.id, Gate.SPEC, approved=True, decided_by="yash")
+    await drain(worker, container)
+
+    async with container.uow() as uow:
+        entries = await uow.costs.list_for_run(run.id)
+
+    assert [e.role for e in entries] == ["planner", "builder", "test_author"]
+    assert all(e.run_id == run.id for e in entries)
+    assert all(e.job_id is not None for e in entries)
+
+
+async def test_two_runs_costs_do_not_mix(container: Container, worker: Worker) -> None:
+    first = await container.runs.create("first brief")
+    second = await container.runs.create("second brief")
+    await drain(worker, container)
+
+    async with container.uow() as uow:
+        first_entries = await uow.costs.list_for_run(first.id)
+        second_entries = await uow.costs.list_for_run(second.id)
+
+    assert len(first_entries) == 1
+    assert len(second_entries) == 1
+    assert first_entries[0].run_id == first.id
+    assert second_entries[0].run_id == second.id
+
+
+async def test_nothing_is_left_pending_in_the_collector(
+    container: Container, worker: Worker
+) -> None:
+    """Anything undrained is cost that never reaches the ledger."""
+    run = await container.runs.create("a brief")
+    await drain(worker, container)
+    await container.runs.decide(run.id, Gate.SPEC, approved=True, decided_by="yash")
+    await drain(worker, container)
+
+    assert container.costs.pending() == 0

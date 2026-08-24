@@ -35,6 +35,7 @@ _EXPECTED_SQL_TYPE: dict[str, str] = {
     "CHAR": "character",
     "INTEGER": "integer",
     "JSONB": "jsonb",
+    "NUMERIC": "numeric",
     "TEXT": "text",
     "TIMESTAMP WITH TIME ZONE": "timestamp with time zone",
     "TIMESTAMP WITHOUT TIME ZONE": "timestamp without time zone",
