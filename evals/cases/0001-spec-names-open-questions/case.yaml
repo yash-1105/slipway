@@ -1,0 +1,32 @@
+name: spec-names-open-questions
+stage: specify
+description: >
+  An underspecified brief must produce a specification that says what it does
+  not know, rather than one that quietly invents the answers. This is the
+  property the spec gate exists to check, so it is the first thing pinned down.
+
+brief: |
+  We need a booking system for a dental practice. Patients should be able to
+  book appointments online.
+
+assertions:
+  - kind: contains_section
+    value: "Open questions"
+    why: The gate is useless if the agent resolves ambiguity silently.
+
+  - kind: contains_section
+    value: "Acceptance criteria"
+
+  - kind: numbered_list_under
+    section: "Acceptance criteria"
+    minimum: 3
+    why: A criterion that is not enumerated cannot be pointed at in review.
+
+  - kind: mentions_any
+    values: ["cancel", "reschedule", "availability", "reminder"]
+    why: >
+      The brief does not mention any of these and a real booking system needs a
+      position on them. The spec must either scope them out or raise them.
+
+  - kind: not_contains
+    values: ["as an AI", "I cannot"]

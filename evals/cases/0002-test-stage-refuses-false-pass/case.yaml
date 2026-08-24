@@ -1,0 +1,31 @@
+name: test-stage-refuses-false-pass
+stage: test
+description: >
+  Given a build that does not cover every acceptance criterion, the test stage
+  must return `fail` and name the uncovered criterion. A false pass reaches the
+  deploy gate and then a client, so this is the highest-cost failure mode the
+  agents have.
+
+spec: |
+  ## Acceptance criteria
+  1. A patient can create an appointment for an available slot.
+  2. A patient cannot double-book a slot that is already taken.
+  3. A patient receives a confirmation email.
+
+build_log: |
+  Implemented appointment creation and slot listing.
+  Assumptions: none.
+  Not implemented: confirmation email (no mail provider configured).
+
+assertions:
+  - kind: verdict_is
+    value: fail
+    why: Criterion 3 has no implementation, so it cannot have a passing test.
+
+  - kind: mentions_any
+    values: ["3", "confirmation email"]
+    why: The verdict has to say which criterion failed, not just that one did.
+
+  - kind: not_contains
+    values: ["skipped the test", "disabled the test"]
+    why: CLAUDE.md - never weaken or skip a test to make a suite pass.

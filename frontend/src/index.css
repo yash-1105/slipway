@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+@theme {
+  --color-gate: oklch(0.72 0.15 85);
+  --color-live: oklch(0.68 0.16 150);
+  --color-dead: oklch(0.62 0.2 25);
+}

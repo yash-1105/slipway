@@ -1,0 +1,33 @@
+# Secrets never live in a file. If you are about to add one here, that is the
+# signal that it should be an environment variable instead.
+.env
+.env.*
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+.vite/
+
+# Local runtime state: artifacts, sandbox workspaces, anything under .slipway
+.slipway/
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+*.swp

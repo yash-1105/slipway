@@ -1,0 +1,23 @@
+# GENERATED FILE -- do not edit by hand.
+#
+# Written by scripts/sync_models.py from a live GET {base_url}/models against
+# Novita. Every model id in Slipway is read from here; none is ever typed from
+# memory. See docs/decisions/0004-novita-base-url.md.
+#
+# To populate it:
+#     export SLIPWAY_NOVITA_API_KEY=...
+#     make models-sync
+#
+# Until then `roles` is empty, the models seam refuses to construct a client,
+# and the process fails at startup with a message saying so -- rather than
+# failing at the first agent call with a 404 that looks like an auth problem.
+
+source_base_url: ""
+synced_at: "never"
+
+# role -> the model that role uses. Populated by the sync.
+roles: {}
+
+# The full list the provider returned, for reference when choosing a role's
+# model. Also populated by the sync.
+available: []

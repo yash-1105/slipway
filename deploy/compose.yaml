@@ -1,0 +1,105 @@
+# Slipway V1: one Postgres, one API, one worker, on the one server.
+#
+# `make dev` brings up only the `postgres` service and runs the API, the worker
+# and the frontend on the laptop. `deploy/deploy.sh` brings up everything on the
+# server.
+#
+# Every value that differs between a laptop and the server comes from the
+# environment. There are no hostnames or absolute paths in this file.
+#
+# Missing SLIPWAY_ variables are deliberately NOT enforced here with `:?`.
+# Compose interpolates the whole file even when you start one service, so a
+# `:?` on the api service would stop `make db` from bringing up Postgres. The
+# validation belongs in app/config.py, which refuses to boot and lists every
+# problem at once; deploy/deploy.sh checks them before touching the server.
+
+name: slipway
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-slipway}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-slipway}
+    ports:
+      # Bound to loopback: the database is never reachable off the host.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-slipway} -d ${POSTGRES_DB:-slipway}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["python", "-m", "app.main"]
+    environment:
+      SLIPWAY_DATABASE_URL: ${SLIPWAY_DATABASE_URL}
+      SLIPWAY_API_HOST: "0.0.0.0"
+      SLIPWAY_API_PORT: "8000"
+      SLIPWAY_NOVITA_API_KEY: ${SLIPWAY_NOVITA_API_KEY}
+      SLIPWAY_NOVITA_BASE_URL: ${SLIPWAY_NOVITA_BASE_URL:-https://api.novita.ai/openai/v1}
+      SLIPWAY_MODELS_BACKEND: ${SLIPWAY_MODELS_BACKEND:-novita}
+      SLIPWAY_SANDBOX_BACKEND: ${SLIPWAY_SANDBOX_BACKEND:-docker}
+      SLIPWAY_DEPLOY_BACKEND: ${SLIPWAY_DEPLOY_BACKEND:-compose_ssh}
+      SLIPWAY_ARTIFACTS_BACKEND: ${SLIPWAY_ARTIFACTS_BACKEND:-local_fs}
+      SLIPWAY_ARTIFACTS_ROOT: /var/lib/slipway/artifacts
+      SLIPWAY_DEPLOY_SSH_HOST: ${SLIPWAY_DEPLOY_SSH_HOST}
+      SLIPWAY_DEPLOY_SSH_USER: ${SLIPWAY_DEPLOY_SSH_USER}
+      SLIPWAY_DEPLOY_PUBLIC_HOST: ${SLIPWAY_DEPLOY_PUBLIC_HOST}
+      SLIPWAY_DEPLOY_REMOTE_ROOT: ${SLIPWAY_DEPLOY_REMOTE_ROOT}
+      SLIPWAY_GITHUB_TOKEN: ${SLIPWAY_GITHUB_TOKEN}
+      SLIPWAY_GITHUB_ORG: ${SLIPWAY_GITHUB_ORG}
+      SLIPWAY_LOG_JSON: "true"
+    ports:
+      - "127.0.0.1:${SLIPWAY_API_PORT:-8000}:8000"
+    volumes:
+      - artifacts:/var/lib/slipway/artifacts
+      - ../config:/app/config:ro
+      - ../prompts:/app/prompts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["python", "-m", "app.worker"]
+    environment:
+      SLIPWAY_DATABASE_URL: ${SLIPWAY_DATABASE_URL}
+      SLIPWAY_NOVITA_API_KEY: ${SLIPWAY_NOVITA_API_KEY}
+      SLIPWAY_NOVITA_BASE_URL: ${SLIPWAY_NOVITA_BASE_URL:-https://api.novita.ai/openai/v1}
+      SLIPWAY_MODELS_BACKEND: ${SLIPWAY_MODELS_BACKEND:-novita}
+      SLIPWAY_SANDBOX_BACKEND: ${SLIPWAY_SANDBOX_BACKEND:-docker}
+      SLIPWAY_DEPLOY_BACKEND: ${SLIPWAY_DEPLOY_BACKEND:-compose_ssh}
+      SLIPWAY_ARTIFACTS_BACKEND: ${SLIPWAY_ARTIFACTS_BACKEND:-local_fs}
+      SLIPWAY_ARTIFACTS_ROOT: /var/lib/slipway/artifacts
+      SLIPWAY_DEPLOY_SSH_HOST: ${SLIPWAY_DEPLOY_SSH_HOST}
+      SLIPWAY_DEPLOY_SSH_USER: ${SLIPWAY_DEPLOY_SSH_USER}
+      SLIPWAY_DEPLOY_PUBLIC_HOST: ${SLIPWAY_DEPLOY_PUBLIC_HOST}
+      SLIPWAY_DEPLOY_REMOTE_ROOT: ${SLIPWAY_DEPLOY_REMOTE_ROOT}
+      SLIPWAY_GITHUB_TOKEN: ${SLIPWAY_GITHUB_TOKEN}
+      SLIPWAY_GITHUB_ORG: ${SLIPWAY_GITHUB_ORG}
+      SLIPWAY_LOG_JSON: "true"
+    volumes:
+      - artifacts:/var/lib/slipway/artifacts
+      - ../config:/app/config:ro
+      - ../prompts:/app/prompts:ro
+      # The worker drives the sandbox seam, which shells out to Docker.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  artifacts:
