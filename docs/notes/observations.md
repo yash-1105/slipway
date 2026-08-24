@@ -10,6 +10,25 @@ the commit that did it. Do not delete entries.
 
 ---
 
+## 2026-08-24 — "Each is a GitHub template repository" is not achievable as written
+
+`slipway-blueprints/README.md` says: "One directory per archetype. Each is a
+**GitHub template repository**." A directory inside a repository cannot be a
+GitHub template repository — the template flag is a property of a repository,
+so either each blueprint is its own repo (and `slipway-blueprints` is an index,
+not a container), or blueprints are directories and instantiation is a copy
+rather than GitHub's "Use this template".
+
+Noticed while satisfying the nextjs-console definition of done, which said
+"create a repo from this template". It was instantiated by copying the tracked
+tree and running `git init`, which is what the directory layout supports. That
+produced a working repo and all four commands passed, but it is not the GitHub
+template flow the README describes.
+
+Nothing was changed. Which way this resolves affects how the builder agent
+scaffolds a run and how a generated repo records which blueprint version it
+came from, so it is a decision rather than a typo.
+
 ## 2026-08-24 — Documents describing behaviour that does not exist
 
 Found while producing the module inventory. All three predate the
