@@ -13,6 +13,24 @@ prototype.
 - If you do not know something, find out. Do not produce a plausible
   approximation and move on.
 
+## Scope
+- Implement only what the current prompt asks for. Nothing else.
+- If you notice something missing or wrong outside that scope, write it in
+  `docs/notes/observations.md` and stop. Do not build it, do not fix it, and do
+  not ask to. The observation is the deliverable.
+- This applies to obvious one-line fixes and to things you have just been asked
+  to report on. Noticing is not permission.
+
+## Documentation
+- No document may describe behaviour that is not covered by a test. This
+  applies to CLAUDE.md, ARCHITECTURE.md, RUNBOOK.md, every ADR, every README
+  and every docstring.
+- If you want to write down that something behaves a certain way, write the
+  test first. If the behaviour is not yet built, describe it as not built, or
+  leave it out.
+- A command named in a runbook must exist. An invariant named in a comment must
+  have a test that fails when it is violated.
+
 ## Stack (Version 1)
 Python 3.11, FastAPI, SQLAlchemy 2.0 async, PostgreSQL 16, uv, pytest, ruff,
 mypy strict, import-linter, structlog.
