@@ -26,6 +26,7 @@ from app.db.uow import SqlUnitOfWork
 from app.deploy.base import Deployer
 from app.deploy.factory import build_deployer
 from app.domain.repositories import UnitOfWork
+from app.integrations.playwright import PlaywrightRunner
 from app.models.base import ModelCatalogue, ModelClient
 from app.models.factory import build_model_client
 from app.models.router import CostCollector, RoutingTable, catalogue_for, load_routing
@@ -40,6 +41,7 @@ from app.services.migrations import MigrationService
 from app.services.models import ModelsService
 from app.services.reconcile import Reconciler
 from app.services.runs import RunService
+from app.services.testing import TestService
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,7 @@ class Container:
     jobs: JobService
     reconciler: Reconciler
     deploys: DeployService
+    tests: TestService
 
     async def aclose(self) -> None:
         await self.engine.dispose()
@@ -127,6 +130,17 @@ def build_container(settings: Settings, *, prompts_root: Path | None = None) -> 
             host=settings.deploy_public_host,
             port_range=(settings.deploy_port_range_start, settings.deploy_port_range_end),
             timeout_seconds=settings.deploy_timeout_seconds,
+            network=settings.deploy_network,
+        ),
+        tests=TestService(
+            uow_factory,
+            PlaywrightRunner(
+                docker_binary=settings.docker_binary,
+                image=settings.playwright_image,
+                results_root=settings.test_results_root,
+            ),
+            timeout_seconds=settings.test_timeout_seconds,
+            preflight_timeout_seconds=settings.test_preflight_timeout_seconds,
         ),
         reconciler=Reconciler(
             uow_factory,

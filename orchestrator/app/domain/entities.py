@@ -216,6 +216,12 @@ class DeploymentRecord:
     container_name: str | None = None
     container_id: str | None = None
     image_tag: str | None = None
+    #: The port inside the container. A sibling container on the same network
+    #: addresses this; `port` is the host port a browser uses.
+    container_port: int = 3000
+    #: The user-defined Docker network the container is on. Without one there is
+    #: no name resolution, and only the host can reach the deployment.
+    network: str | None = None
     url: str | None = None
     log: str | None = None
     settled_at: datetime | None = None

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
@@ -217,6 +218,73 @@ def models_catalogue() -> None:
             print("  (empty -- run `make models-sync`)")
     finally:
         asyncio.run(container.aclose())
+
+
+@app.command("test")
+def run_tests(
+    deployment_id: UUID,
+    suite: Annotated[Path, typer.Option("--suite", help="Directory holding the Playwright suite")],
+    criteria: Annotated[
+        str, typer.Option(help="Comma-separated acceptance criterion ids the spec declares")
+    ] = "",
+    json_out: Annotated[
+        Path | None, typer.Option("--json", help="Write the full report here")
+    ] = None,
+) -> None:
+    """Run an acceptance suite against a deployment, and report by criterion."""
+    container = _container()
+    expected = tuple(c.strip() for c in criteria.split(",") if c.strip())
+
+    async def go() -> None:
+        try:
+            report = await container.tests.run_suite(
+                deployment_id, suite=suite, expected_criteria=expected
+            )
+        finally:
+            await container.aclose()
+
+        if json_out is not None:
+            json_out.write_text(json.dumps(report.as_dict(), indent=2))
+
+        if report.failure:
+            print(f"the suite did not run: {report.failure}")
+            raise typer.Exit(code=2)
+
+        print(f"deployment  {report.deployment_id}")
+        print(f"url         {report.base_url}  (network {report.network})")
+        print(f"results     {report.results_dir}")
+        print(f"duration    {report.duration_ms / 1000:.1f}s")
+        print()
+        print("BY CRITERION")
+        for outcome in report.by_criterion:
+            mark = {"verified": "PASS", "failed": "FAIL", "untested": "UNTESTED"}[outcome.status]
+            print(
+                f"  {mark:<9} {outcome.criterion:<10} "
+                f"{outcome.tests_passed} passed, {outcome.tests_failed} failed"
+            )
+            for title in outcome.failing_tests:
+                print(f"                       failing: {title}")
+        if not report.by_criterion:
+            print("  (no test declares a criterion)")
+        print()
+        print("TESTS")
+        for test in report.tests:
+            mark = "PASS" if test.ok else "FAIL"
+            print(f"  {mark:<5} {test.duration_ms:>6}ms  {test.title}")
+            if test.trace_path:
+                print(f"           trace:      {test.trace_path}")
+            if test.screenshot_path:
+                print(f"           screenshot: {test.screenshot_path}")
+            if test.error:
+                first = test.error.splitlines()[0] if test.error.splitlines() else ""
+                print(f"           error:      {first}")
+        print()
+        print(f"{report.passed} passed, {report.failed} failed -- "
+              f"{'GREEN' if report.ok else 'NOT GREEN'}")
+        if not report.ok:
+            raise typer.Exit(code=1)
+
+    asyncio.run(go())
 
 
 @app.command("migrate")

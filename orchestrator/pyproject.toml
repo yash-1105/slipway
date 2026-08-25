@@ -93,6 +93,9 @@ asyncio_mode = "auto"
 # created them and teardown fails with "Event loop is closed".
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+# Every test here is a function. Without this, pytest tries to collect
+# domain classes named Test* -- TestOutcome, TestService -- and warns.
+python_classes = []
 testpaths = ["tests"]
 markers = [
     "integration: needs a real Postgres and a real Docker daemon",

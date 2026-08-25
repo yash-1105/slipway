@@ -85,6 +85,22 @@ class Settings(BaseSettings):
     deploy_timeout_seconds: float = 600.0
     #: How long to wait for a container's own HEALTHCHECK to pass.
     deploy_health_timeout_seconds: float = 120.0
+    #: The user-defined Docker network previews join. Containers on the default
+    #: bridge cannot resolve each other by name, so a test runner could only
+    #: reach a deployment through the host -- which does not work on the server.
+    deploy_network: str = "slipway-previews"
+
+    # --- test harness -------------------------------------------------------
+    #: The image Playwright runs in. Pinned: an unpinned runner changes what
+    #: "the tests passed" means without anyone changing a test.
+    playwright_image: str = "mcr.microsoft.com/playwright:v1.62.1-noble"
+    #: Where traces and screenshots are written, one directory per run.
+    test_results_root: Path = REPO_ROOT / ".slipway" / "test-results"
+    test_timeout_seconds: float = 900.0
+    #: How long the reachability preflight waits before giving up. Short on
+    #: purpose: an unreachable deployment should fail in seconds, not after a
+    #: cascade of per-test Playwright timeouts.
+    test_preflight_timeout_seconds: float = 20.0
     deploy_port_range_start: int = 41000
     deploy_port_range_end: int = 41999
 

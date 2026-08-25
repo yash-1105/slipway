@@ -10,6 +10,58 @@ the commit that did it. Do not delete entries.
 
 ---
 
+## 2026-08-25 — Docker Desktop's disk is too small for this toolchain
+
+The Docker VM disk on this machine is **7.8 GB total**. The Playwright image is
+3.83 GB of that, and the runner image built on top shares those layers. What is
+left has to hold Postgres (411 MB), one ~294 MB preview image per deployment,
+and the build cache, which reached 2.8 GB during a single Next.js build.
+
+It filled three times during P3. Each time the symptom was something unrelated:
+a `docker pull` that reported success because it was piped to `tail`, then tests
+skipping for a missing image, then Postgres being killed mid-write and coming
+back up in recovery mode unable to checkpoint -- `PANIC: could not write to file
+"pg_logical/replorigin_checkpoint.tmp": No space left on device`.
+
+Reclaiming build cache each time recovered it, and no data was lost, but a
+database killed by disk pressure is not something to rely on recovering.
+
+**Needs a decision, and it is not a code change:** raise Docker Desktop's disk
+image size (Settings, Resources, Disk image size). 7.8 GB is not enough to run
+a browser image, a database and container builds at the same time, and the
+failures it causes point everywhere except at the disk.
+
+Related and already recorded above: the deployer leaks one preview image per
+deployment, which makes this arrive faster than it otherwise would.
+---
+
+## 2026-08-25 — The deployer leaks one image per deployment
+
+`LocalContainerDeployer.deploy()` builds `slipway/preview:<deployment-id>`.
+`teardown()` removes the container and leaves the image.
+
+Found the hard way: 62 of them, about 5.6 GB, filled the Docker disk and made an
+unrelated `docker pull` fail partway through with `no space left on device`. The
+pull's own exit code was 0 -- it was piped to `tail` -- so it looked like it had
+worked, and the failure surfaced two steps later as tests skipping for a missing
+image.
+
+Every deploy leaks one. Test runs deploy several. On the server this fills the
+disk on a timescale of days, and the symptom will be some other thing failing.
+
+**Not fixed** -- it is a P2 defect found during P3, and removing an image during
+teardown needs a decision the scope rule says is not mine to take here: whether
+teardown removes the image unconditionally, or whether images are kept for a
+window so a redeploy of the same build is fast. Two reasonable answers.
+
+What was done instead: the integration test fixtures now remove the images they
+create, so the test suite stops adding to it. That is the tests cleaning up
+after themselves, not a fix.
+
+Related, and cheap: `docker system df` showed 1.6 GB of reclaimable build cache
+at the same time. Nothing prunes that either.
+---
+
 ## 2026-08-24 — Open question: should the planner move to deepseek-v4-flash?
 
 The tool-calling bake-off made `deepseek/deepseek-v4-flash` the best candidate

@@ -45,7 +45,9 @@ class DeployService:
         host: str,
         port_range: tuple[int, int],
         timeout_seconds: float,
+        network: str = "slipway-previews",
     ) -> None:
+        self._network = network
         self._uow = uow_factory
         self._deployer = deployer
         self._host = host
@@ -58,6 +60,7 @@ class DeployService:
         *,
         artifact_uri: str,
         image_tag: str | None = None,
+        container_port: int = 3000,
     ) -> DeploymentRecord:
         """Claim a port by inserting, and record the deployment before it exists.
 
@@ -81,6 +84,8 @@ class DeployService:
                     created_at=datetime.now(UTC),
                     container_name=name,
                     image_tag=image_tag,
+                    container_port=container_port,
+                    network=self._network,
                 )
                 claimed = await uow.deployments.claim_port(candidate)
                 if claimed is not None:
@@ -112,7 +117,9 @@ class DeployService:
     ) -> DeployResult:
         """Allocate, record, build and start. Failures come back as values."""
         build_args, runtime_env = split_env(env or {})
-        record = await self.allocate(run_id, artifact_uri=artifact_uri)
+        record = await self.allocate(
+            run_id, artifact_uri=artifact_uri, container_port=container_port
+        )
 
         target = DeploymentTarget(
             run_id=run_id,

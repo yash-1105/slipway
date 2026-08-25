@@ -101,10 +101,21 @@ def reconciler(uow_factory: UowFactory, deployer: LocalContainerDeployer) -> Rec
 
 @pytest.fixture
 def cleanup_containers() -> Iterator[None]:
+    """Remove the containers AND the images these tests built.
+
+    Without the image half, a run leaves one ~90MB image per deployment behind.
+    Sixty-two of them filled the Docker disk and stopped an unrelated pull --
+    the leak itself is the deployer's, recorded in docs/notes/observations.md,
+    but these tests are not entitled to leave their own mess for it.
+    """
     yield
     subprocess.run(
         f"docker ps -aq --filter label={LABEL_MANAGED}=true | xargs -r docker rm -f",
         shell=True, capture_output=True, timeout=120,
+    )
+    subprocess.run(
+        "docker images --filter reference=slipway/preview -q | xargs -r docker rmi -f",
+        shell=True, capture_output=True, timeout=180,
     )
 
 

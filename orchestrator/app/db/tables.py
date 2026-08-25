@@ -110,6 +110,8 @@ deployments = Table(
     Column("container_id", Text),
     Column("destroyed_at", DateTime(timezone=True)),
     Column("image_tag", Text),
+    Column("container_port", Integer, nullable=False),
+    Column("network", Text),
 )
 
 cost_entries = Table(

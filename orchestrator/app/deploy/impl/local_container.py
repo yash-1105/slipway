@@ -46,13 +46,47 @@ class LocalContainerDeployer(Deployer):
         *,
         docker_binary: str,
         public_host: str,
+        network: str = "slipway-previews",
         health_timeout_seconds: float = 120.0,
         health_poll_seconds: float = 1.0,
     ) -> None:
         self._docker = docker_binary
         self._public_host = public_host
+        self._network = network
         self._health_timeout = health_timeout_seconds
         self._health_poll = health_poll_seconds
+
+    @property
+    def network(self) -> str:
+        return self._network
+
+    async def ensure_network(self) -> None:
+        """Create the preview network if it is not there. Idempotent.
+
+        A user-defined network, not the default bridge: only the former gives
+        containers DNS names for each other. Without it a test runner can reach
+        a deployment only through the host, which is exactly the code path that
+        will not exist on the server.
+        """
+        exists = await run_process(
+            [self._docker, "network", "inspect", self._network], timeout_seconds=30.0
+        )
+        if exists.ok:
+            return
+        created = await run_process(
+            [self._docker, "network", "create", self._network], timeout_seconds=60.0
+        )
+        if created.ok:
+            log.info("deploy.network_created", network=self._network)
+            return
+        # Another process created it between the inspect and the create. That is
+        # the expected race, not an error.
+        if "already exists" not in created.stderr:
+            log.warning(
+                "deploy.network_create_failed",
+                network=self._network,
+                stderr=created.stderr.strip()[:300],
+            )
 
     # --- the seam ---------------------------------------------------------
 
@@ -68,6 +102,8 @@ class LocalContainerDeployer(Deployer):
         missing = await self._require_healthcheck(image, target)
         if missing is not None:
             return missing
+
+        await self.ensure_network()
 
         started = await self._start(target, image, timeout_seconds)
         if isinstance(started, DeployFailure):
@@ -242,6 +278,10 @@ class LocalContainerDeployer(Deployer):
             "--label", f"{LABEL_RUN}={target.run_id}",
             # Loopback only. A preview is for us and the client we send the URL
             # to over a tunnel, not for the internet.
+            # Both: the network gives sibling containers a name to reach, the
+            # publish gives a human a URL to open.
+            "--network", self._network,
+            "--network-alias", name,
             "--publish", f"127.0.0.1:{target.port}:{target.container_port}",
             "--restart", "unless-stopped",
         ]

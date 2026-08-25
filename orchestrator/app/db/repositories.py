@@ -371,6 +371,8 @@ class SqlDeploymentRepository:
                         container_name=record.container_name,
                         container_id=record.container_id,
                         image_tag=record.image_tag,
+                        container_port=record.container_port,
+                        network=record.network,
                         url=record.url,
                         log=record.log,
                         created_at=record.created_at,
@@ -502,6 +504,8 @@ def _to_deployment(row: dict[str, object]) -> DeploymentRecord:
         container_name=maybe("container_name"),
         container_id=maybe("container_id"),
         image_tag=maybe("image_tag"),
+        container_port=int(row["container_port"]),  # type: ignore[call-overload]
+        network=maybe("network"),
         url=maybe("url"),
         log=maybe("log"),
         settled_at=row.get("settled_at"),  # type: ignore[arg-type]
