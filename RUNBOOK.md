@@ -107,9 +107,11 @@ a live worker id, and the leased count should be falling.
 
 ## Docker is out of disk
 
-**Slipway needs at least 60 GB of Docker disk.** Docker Desktop's default is far
-less. Raise it in Settings, Resources, Disk image size; the daemon restarts and
-stops every running container, so do it between runs.
+**Slipway needs at least 30 GB of Docker disk.** Measured: 23.8 GB free after a
+full test suite on a 31.4 GB disk. Docker Desktop's default is far less. Raise
+it in Settings, Resources, Disk image size — the daemon restarts, stops every
+running container, and **recreates the disk, which removes every image**, so do
+it between runs and expect to re-pull.
 
 What consumes it: the Playwright runner image is 3.8 GB, each preview image is
 roughly 90–300 MB, Postgres is 400 MB, and a single Next.js build can leave 2.8 GB
@@ -132,11 +134,17 @@ disk and `df` on the Mac tells you nothing:
     docker run --rm alpine:3.20 df -h /
     docker system df
 
-**Act**, in increasing order of destructiveness:
+**Act**, in increasing order of destructiveness. Build cache is what grows:
+a single Next.js build left 2.8 GB of it, and nothing prunes it on its own.
 
-    docker builder prune -af          # build cache; regenerable, safe
+    docker system df                  # where it went; check Build Cache first
+    docker builder prune -af          # regenerable, safe, usually enough
+    docker system df                  # confirm it came back
+
     slipway reconcile --dry-run       # orphaned preview images and containers
     slipway reconcile --apply
+
+`docker system df -v` lists images individually when the summary is not enough.
 
 Reconcile knows about preview images: teardown removes a deployment's image, and
 anything left behind is a crash between building and tearing down. It will not
