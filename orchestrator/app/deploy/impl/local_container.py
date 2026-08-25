@@ -26,6 +26,7 @@ from app.deploy.base import (
     Deployer,
     DeployFailure,
     Deployment,
+    DeploymentImage,
     DeploymentTarget,
     DeployResult,
     project_name_for,
@@ -39,6 +40,9 @@ log = structlog.get_logger(__name__)
 LABEL_MANAGED = "slipway.managed"
 LABEL_DEPLOYMENT = "slipway.deployment_id"
 LABEL_RUN = "slipway.run_id"
+
+#: Every preview image is tagged here, one tag per deployment id.
+IMAGE_REPOSITORY = "slipway/preview"
 
 class LocalContainerDeployer(Deployer):
     def __init__(
@@ -93,7 +97,7 @@ class LocalContainerDeployer(Deployer):
     async def deploy(
         self, target: DeploymentTarget, artifact_uri: str, *, timeout_seconds: float
     ) -> DeployResult:
-        image = f"slipway/preview:{target.deployment_id}"
+        image = image_tag_for(target.deployment_id)
 
         built = await self._build(target, image, timeout_seconds)
         if built is not None:
@@ -116,7 +120,13 @@ class LocalContainerDeployer(Deployer):
         return healthy
 
     async def teardown(self, deployment_id: UUID, *, timeout_seconds: float) -> None:
-        """Remove the container. Idempotent: removing one that is gone is success."""
+        """Remove the container and its image. Idempotent.
+
+        The image goes unconditionally. It is ~90MB, one per deployment, and
+        nothing else ever removes it: sixty-two accumulated to 5.6GB and filled
+        the Docker disk before anyone noticed, and the symptom was an unrelated
+        pull failing.
+        """
         name = container_name_for(deployment_id)
         result = await run_process(
             [self._docker, "rm", "--force", "--volumes", name],
@@ -124,16 +134,68 @@ class LocalContainerDeployer(Deployer):
         )
         if result.ok:
             log.info("deploy.torn_down", container=name)
+        else:
+            stderr = result.stderr.strip()
+            if "no such container" in stderr.lower():
+                # Already gone. Idempotence means this is the success case, not
+                # an error to swallow: a caller retrying must not fail.
+                log.info("deploy.already_torn_down", container=name)
+            else:
+                log.warning("deploy.teardown_failed", container=name, stderr=stderr[:400])
+
+        # After the container, always: an image with a container still using it
+        # cannot be removed, and leaving it is the leak.
+        await self.remove_image(deployment_id, timeout_seconds=timeout_seconds)
+
+    async def remove_image(self, deployment_id: UUID, *, timeout_seconds: float) -> None:
+        tag = image_tag_for(deployment_id)
+        result = await run_process(
+            [self._docker, "rmi", "--force", tag], timeout_seconds=timeout_seconds
+        )
+        if result.ok:
+            log.info("deploy.image_removed", image=tag)
             return
 
         stderr = result.stderr.strip()
-        if "No such container" in stderr or "no such container" in stderr:
-            # Already gone. Idempotence means this is the success case, not an
-            # error to swallow: a caller retrying a teardown must not fail.
-            log.info("deploy.already_torn_down", container=name)
+        if "no such image" in stderr.lower():
             return
+        log.warning("deploy.image_remove_failed", image=tag, stderr=stderr[:400])
 
-        log.warning("deploy.teardown_failed", container=name, stderr=stderr[:400])
+    async def list_images(self) -> list[DeploymentImage]:
+        """Every preview image still on this machine."""
+        result = await run_process(
+            [
+                self._docker, "images",
+                "--filter", f"reference={IMAGE_REPOSITORY}",
+                "--format", "{{.Tag}}\t{{.Size}}",
+            ],
+            timeout_seconds=60.0,
+        )
+        if not result.ok:
+            log.warning("deploy.list_images_failed", stderr=result.stderr.strip()[:300])
+            return []
+
+        found: list[DeploymentImage] = []
+        for line in result.stdout.splitlines():
+            tag, _, size = line.partition("\t")
+            tag = tag.strip()
+            if not tag or tag == "<none>":
+                continue
+            try:
+                deployment_id = UUID(tag)
+            except ValueError:
+                # A preview image whose tag is not a deployment id is not ours
+                # to reconcile. Report it rather than removing it.
+                log.warning("deploy.unparseable_image_tag", tag=tag)
+                continue
+            found.append(
+                DeploymentImage(
+                    deployment_id=deployment_id,
+                    reference=f"{IMAGE_REPOSITORY}:{tag}",
+                    size_bytes=_bytes_from(size.strip()),
+                )
+            )
+        return found
 
     async def list_live(self) -> list[Deployment]:
         """Every container we manage, running or stopped."""
@@ -372,6 +434,24 @@ class LocalContainerDeployer(Deployer):
         )
 
 
+def image_tag_for(deployment_id: UUID) -> str:
+    """The image built for a deployment. One-to-one with its id, so the
+    reconciler can tell whose an orphaned image is."""
+    return f"{IMAGE_REPOSITORY}:{deployment_id}"
+
+
+def _bytes_from(size: str) -> int:
+    """Docker prints human sizes; the report is read by machines too."""
+    units = {"B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12}
+    for suffix, factor in sorted(units.items(), key=lambda kv: -len(kv[0])):
+        if size.upper().endswith(suffix):
+            try:
+                return int(float(size[: -len(suffix)]) * factor)
+            except ValueError:
+                return 0
+    return 0
+
+
 def container_name_for(deployment_id: UUID) -> str:
     """The container's name. One-to-one with the deployment's project name."""
     return project_name_for(deployment_id)
@@ -387,9 +467,11 @@ def _parse_labels(raw: str) -> dict[str, str]:
 
 
 __all__ = [
+    "IMAGE_REPOSITORY",
     "LABEL_DEPLOYMENT",
     "LABEL_MANAGED",
     "LABEL_RUN",
     "LocalContainerDeployer",
     "container_name_for",
+    "image_tag_for",
 ]

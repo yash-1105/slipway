@@ -105,6 +105,54 @@ a live worker id, and the leased count should be falling.
 
 ---
 
+## Docker is out of disk
+
+**Slipway needs at least 60 GB of Docker disk.** Docker Desktop's default is far
+less. Raise it in Settings, Resources, Disk image size; the daemon restarts and
+stops every running container, so do it between runs.
+
+What consumes it: the Playwright runner image is 3.8 GB, each preview image is
+roughly 90–300 MB, Postgres is 400 MB, and a single Next.js build can leave 2.8 GB
+of build cache.
+
+**The symptom does not point at the disk.** All of these were observed within an
+hour of each other on a 7.8 GB disk, and each one sends you somewhere else:
+
+| What you see | What it actually is |
+| --- | --- |
+| `docker pull` reports success, image is absent | The pull failed partway; piped through `tail`, the pipeline's exit code was `tail`'s |
+| Tests skip for a "missing" image | The pull above never completed |
+| A build fails on an unrelated compile error | It got far enough to fail differently; look above the error |
+| Postgres exits and comes back in recovery mode | Killed mid-write. `PANIC: could not write to file "pg_logical/replorigin_checkpoint.tmp": No space left on device` |
+| Postgres will not leave recovery | It cannot checkpoint, because there is still no space |
+
+**Confirm.** Ask the daemon, not the host — on macOS the Docker VM has its own
+disk and `df` on the Mac tells you nothing:
+
+    docker run --rm alpine:3.20 df -h /
+    docker system df
+
+**Act**, in increasing order of destructiveness:
+
+    docker builder prune -af          # build cache; regenerable, safe
+    slipway reconcile --dry-run       # orphaned preview images and containers
+    slipway reconcile --apply
+
+Reconcile knows about preview images: teardown removes a deployment's image, and
+anything left behind is a crash between building and tearing down. It will not
+touch an image a live deployment is using.
+
+If that is not enough, raise the disk size. Do not `docker system prune -a`: it
+removes images this machine did not build and cannot cheaply replace.
+
+**Afterwards.** If Postgres was killed, check it actually recovered before
+trusting it:
+
+    docker exec <postgres-container> pg_isready
+    psql "$DB" -c "SELECT count(*) FROM deployments;"
+
+---
+
 ## Orphan cleanup
 
 **Symptom.** Containers or held ports exist that no live run owns — usually

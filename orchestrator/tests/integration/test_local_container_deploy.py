@@ -20,9 +20,11 @@ import pytest
 
 from app.deploy.base import DeployFailure, Deployment, is_build_time, split_env
 from app.deploy.impl.local_container import (
+    IMAGE_REPOSITORY,
     LABEL_MANAGED,
     LocalContainerDeployer,
     container_name_for,
+    image_tag_for,
 )
 from app.domain.entities import DeploymentStatus
 from app.domain.ids import uuid7
@@ -335,3 +337,99 @@ async def test_destroy_is_idempotent_and_frees_the_port(
     # The port is genuinely free: a new deployment can claim it.
     holders = await deploys.list_holding_ports()
     assert port not in [h.port for h in holders]
+
+
+def image_exists(deployment_id: UUID) -> bool:
+    return subprocess.run(
+        ["docker", "image", "inspect", image_tag_for(deployment_id)],
+        capture_output=True, timeout=60,
+    ).returncode == 0
+
+
+@needs_docker
+async def test_no_image_survives_teardown(
+    deploys: DeployService, uow_factory: UowFactory, tmp_path: Path,
+    cleanup_containers: None
+) -> None:
+    """The leak, closed.
+
+    An image per deployment, ~90MB each, that nothing ever removed: 62 of them
+    reached 5.6GB and filled the Docker disk. The cache argument does not apply
+    -- every deployment builds a different commit, so the tag is never reused.
+    """
+    run_id = await _a_run(uow_factory)
+    context = write_project(tmp_path / "app", WORKING_APP)
+
+    result = await deploys.deploy(
+        run_id, context_path=context, artifact_uri=f"file://{context}"
+    )
+    assert isinstance(result, Deployment), getattr(result, "detail", "")
+    assert image_exists(result.deployment_id), "the deploy should have built an image"
+
+    await deploys.destroy(result.deployment_id)
+
+    assert not image_exists(result.deployment_id), (
+        f"{image_tag_for(result.deployment_id)} survived teardown"
+    )
+
+
+@needs_docker
+async def test_removing_an_image_twice_is_not_an_error(
+    deploys: DeployService, deployer: LocalContainerDeployer, uow_factory: UowFactory,
+    tmp_path: Path, cleanup_containers: None
+) -> None:
+    """Teardown is retried; the second attempt must not fail on what the first removed."""
+    run_id = await _a_run(uow_factory)
+    context = write_project(tmp_path / "app", WORKING_APP)
+    result = await deploys.deploy(
+        run_id, context_path=context, artifact_uri=f"file://{context}"
+    )
+    assert isinstance(result, Deployment), getattr(result, "detail", "")
+
+    await deploys.destroy(result.deployment_id)
+    await deployer.remove_image(result.deployment_id, timeout_seconds=60.0)
+    await deployer.remove_image(result.deployment_id, timeout_seconds=60.0)
+
+    assert not image_exists(result.deployment_id)
+
+
+@needs_docker
+async def test_a_failed_deploy_does_not_leave_its_image_behind(
+    deploys: DeployService, uow_factory: UowFactory, tmp_path: Path,
+    cleanup_containers: None
+) -> None:
+    """A build that fails leaves nothing to remove; one that starts and then
+    fails health must not keep its image either."""
+    run_id = await _a_run(uow_factory)
+    context = write_project(tmp_path / "no-health", NO_HEALTHCHECK_APP)
+
+    result = await deploys.deploy(
+        run_id, context_path=context, artifact_uri=f"file://{context}"
+    )
+    assert isinstance(result, DeployFailure)
+    assert result.deployment_id is not None
+
+    # The deploy failed after building. Nothing torn it down yet, so the image
+    # is still there -- and the reconciler is what notices.
+    await deploys.destroy(result.deployment_id)
+    assert not image_exists(result.deployment_id)
+
+
+@needs_docker
+async def test_list_images_reports_only_our_preview_images(
+    deploys: DeployService, deployer: LocalContainerDeployer, uow_factory: UowFactory,
+    tmp_path: Path, cleanup_containers: None
+) -> None:
+    run_id = await _a_run(uow_factory)
+    context = write_project(tmp_path / "app", WORKING_APP)
+    result = await deploys.deploy(
+        run_id, context_path=context, artifact_uri=f"file://{context}"
+    )
+    assert isinstance(result, Deployment), getattr(result, "detail", "")
+
+    images = await deployer.list_images()
+
+    ours = [i for i in images if i.deployment_id == result.deployment_id]
+    assert len(ours) == 1
+    assert ours[0].reference == f"{IMAGE_REPOSITORY}:{result.deployment_id}"
+    assert ours[0].size_bytes > 0, "size is reported so a report can total the waste"

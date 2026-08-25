@@ -45,6 +45,10 @@ class ReconcileReport:
     #: A record still holding its port whose container is gone -- removed by
     #: hand, or by a `docker system prune`. The port is being held for nothing.
     vanished_deployments: list[Discrepancy] = field(default_factory=list)
+    #: An image built for a deployment that no longer exists. Teardown removes
+    #: these now, so one here means a crash between building and tearing down --
+    #: or an image from before teardown did. Nothing else ever looks at them.
+    orphan_images: list[Discrepancy] = field(default_factory=list)
 
     @property
     def all(self) -> list[Discrepancy]:
@@ -52,6 +56,7 @@ class ReconcileReport:
             *self.orphan_sandboxes,
             *self.orphan_deployments,
             *self.vanished_deployments,
+            *self.orphan_images,
         ]
 
     @property
@@ -150,10 +155,29 @@ class Reconciler:
             if record.status is DeploymentStatus.LIVE and record.id not in seen_ids
         ]
 
+        # An image whose deployment no longer holds a record is disk nobody
+        # will ever reclaim. 5.6GB of them accumulated unnoticed, so they are
+        # reported by name and size rather than left to a human's `docker images`.
+        images = await self._deployer.list_images()
+        orphan_images = [
+            Discrepancy(
+                kind="image",
+                subject=image.reference,
+                detail=(
+                    f"image exists ({image.size_bytes // 10**6}MB) but no live "
+                    "deployment record claims it"
+                ),
+                deployment_id=image.deployment_id,
+            )
+            for image in images
+            if image.deployment_id not in by_id
+        ]
+
         return ReconcileReport(
             orphan_sandboxes=orphan_sandboxes,
             orphan_deployments=orphan_deployments,
             vanished_deployments=vanished_deployments,
+            orphan_images=orphan_images,
         )
 
     async def apply(self, report: ReconcileReport) -> ReconcileReport:
@@ -183,6 +207,14 @@ class Reconciler:
                 discrepancy.deployment_id, timeout_seconds=self._teardown_timeout
             )
             log.info("reconcile.deployment_torn_down", project=discrepancy.subject)
+
+        for discrepancy in report.orphan_images:
+            if discrepancy.deployment_id is None:
+                continue
+            await self._deployer.remove_image(
+                discrepancy.deployment_id, timeout_seconds=self._teardown_timeout
+            )
+            log.info("reconcile.image_removed", image=discrepancy.subject)
 
         # Settle the record for anything torn down or already gone, in one pass.
         # `release_port=True` is what gives the port back, and it is the same

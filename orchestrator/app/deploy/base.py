@@ -101,6 +101,20 @@ def project_name_for(deployment_id: UUID) -> str:
     return f"slipway-preview-{deployment_id}"
 
 
+@dataclass(frozen=True, slots=True)
+class DeploymentImage:
+    """An image a backend built for a deployment.
+
+    Reconciliation needs these because they outlive the container: a crash
+    between building and tearing down leaves one behind, and nothing else in the
+    system would ever look at it. Sixty-two accumulated before anything noticed.
+    """
+
+    deployment_id: UUID
+    reference: str
+    size_bytes: int = 0
+
+
 class Deployer(Protocol):
     """The deploy seam.
 
@@ -118,7 +132,24 @@ class Deployer(Protocol):
         """Bring up the artifact at the target. Idempotent per deployment_id."""
 
     async def teardown(self, deployment_id: UUID, *, timeout_seconds: float) -> None:
-        """Idempotent. Tearing down something already gone is success."""
+        """Remove everything the deployment created, including any image.
+
+        Idempotent: tearing down something already gone is success.
+
+        The image goes too, unconditionally. Keeping it would only pay off when
+        the same commit is redeployed, and every deployment builds from a
+        different one -- so the cache almost never hits, and what is certain is
+        that the disk grows by an image per deploy.
+        """
+
+    async def list_images(self) -> list[DeploymentImage]:
+        """Images this backend built that still exist.
+
+        A backend that does not build images returns nothing.
+        """
+
+    async def remove_image(self, deployment_id: UUID, *, timeout_seconds: float) -> None:
+        """Remove one deployment's image. Idempotent."""
 
     async def list_live(self) -> list[Deployment]:
         """Every deployment this backend can still see, running or stopped.

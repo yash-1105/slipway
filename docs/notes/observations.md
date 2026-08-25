@@ -12,6 +12,11 @@ the commit that did it. Do not delete entries.
 
 ## 2026-08-25 — Docker Desktop's disk is too small for this toolchain
 
+**Resolved**, 2026-08-25. The disk was raised, and `RUNBOOK.md` now has a
+*Docker is out of disk* section stating the 60 GB requirement and — more
+usefully — the table of misleading symptoms, since every one of them points
+somewhere other than the disk.
+
 The Docker VM disk on this machine is **7.8 GB total**. The Playwright image is
 3.83 GB of that, and the runner image built on top shares those layers. What is
 left has to hold Postgres (411 MB), one ~294 MB preview image per deployment,
@@ -36,6 +41,12 @@ deployment, which makes this arrive faster than it otherwise would.
 ---
 
 ## 2026-08-25 — The deployer leaks one image per deployment
+
+**Resolved**, 2026-08-25. Teardown removes the image unconditionally: the
+redeploy-cache argument does not apply, because every deployment builds a
+different commit so the tag is never reused, which trades guaranteed disk
+growth for a cache hit that almost never lands. `reconcile` now detects
+orphaned preview images too, since 62 accumulated without anything noticing.
 
 `LocalContainerDeployer.deploy()` builds `slipway/preview:<deployment-id>`.
 `teardown()` removes the container and leaves the image.

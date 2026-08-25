@@ -19,11 +19,13 @@ import pytest
 
 from app.deploy.base import Deployment
 from app.deploy.impl.local_container import (
+    IMAGE_REPOSITORY,
     LABEL_DEPLOYMENT,
     LABEL_MANAGED,
     LABEL_RUN,
     LocalContainerDeployer,
     container_name_for,
+    image_tag_for,
 )
 from app.domain.entities import DeploymentStatus, Run, RunState, Trigger
 from app.domain.ids import uuid7
@@ -320,3 +322,64 @@ async def test_apply_is_idempotent(
 async def test_a_clean_system_reports_clean(reconciler: Reconciler) -> None:
     report = await reconciler.inspect()
     assert report.is_clean, [(d.kind, d.subject, d.detail) for d in report.all]
+
+
+def image_exists(deployment_id: UUID) -> bool:
+    return subprocess.run(
+        ["docker", "image", "inspect", image_tag_for(deployment_id)],
+        capture_output=True, timeout=60,
+    ).returncode == 0
+
+
+@needs_docker
+async def test_reconcile_detects_an_image_no_deployment_claims(
+    reconciler: Reconciler, cleanup_containers: None
+) -> None:
+    """The leak that accumulated 5.6GB without anything noticing.
+
+    Teardown removes the image now, so one here means a crash between building
+    and tearing down. Nothing else in the system ever looks at these.
+    """
+    stray_id = uuid7()
+    subprocess.run(
+        ["docker", "tag", "alpine:3.20", image_tag_for(stray_id)],
+        capture_output=True, timeout=120, check=True,
+    )
+    assert image_exists(stray_id)
+
+    report = await reconciler.inspect()
+
+    assert any(d.deployment_id == stray_id for d in report.orphan_images), (
+        f"orphaned image not detected; saw {[d.subject for d in report.all]}"
+    )
+    reported = next(d for d in report.orphan_images if d.deployment_id == stray_id)
+    assert f"{IMAGE_REPOSITORY}:{stray_id}" == reported.subject
+    assert "MB" in reported.detail, "the size is reported so waste can be totalled"
+
+    await reconciler.apply(report)
+
+    assert not image_exists(stray_id), "apply() must remove an image nothing claims"
+
+
+@needs_docker
+async def test_reconcile_leaves_the_image_of_a_live_deployment_alone(
+    deploys: DeployService, reconciler: Reconciler, uow_factory: UowFactory,
+    tmp_path: Path, cleanup_containers: None
+) -> None:
+    """The safety half. Removing a live deployment's image would break a
+    restart, and `docker rmi --force` on an in-use image is not a no-op."""
+    run_id = await a_live_run(uow_factory)
+    context = write_project(tmp_path / "app")
+    result = await deploys.deploy(run_id, context_path=context, artifact_uri=f"file://{context}")
+    assert isinstance(result, Deployment), getattr(result, "detail", "")
+
+    assert image_exists(result.deployment_id)
+
+    report = await reconciler.inspect()
+    assert not any(d.deployment_id == result.deployment_id for d in report.orphan_images)
+
+    await reconciler.apply(report)
+
+    assert image_exists(result.deployment_id), "apply() removed a live deployment's image"
+    record = await deploys.get(result.deployment_id)
+    assert record is not None and record.destroyed_at is None
